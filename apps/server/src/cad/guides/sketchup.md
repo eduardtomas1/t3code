@@ -9,7 +9,6 @@ Read before reading or editing a designer's open SketchUp model. `cad_export` an
 - Erase without explicit consent for those exact objects. Erasing an edge deletes its faces. Prefer `skp.set_hidden` or a tag, which are reversible.
 - Tidy tags, names, nesting, hidden state or materials nobody asked about.
 - Tag faces or edges. Raw geometry stays Untagged; only groups and components carry tags.
-- Read while an apply is `pending`. The approval dialog blocks SketchUp, so reads time out; call `cad_apply_changes` again instead.
 
 ## MUST
 
@@ -25,7 +24,7 @@ Read before reading or editing a designer's open SketchUp model. `cad_export` an
 3. `cad_get_selection`. A non-empty `editingInside` means a group is open for editing: before you edit, ask the designer to close it, because entering or leaving one makes erase previews stale.
 4. `cad_query_objects` for lookups (`fields: "compact"` on big models).
 5. If reading answers the request, stop there.
-6. To edit: preview, tell the designer what will change, apply, then capture to verify.
+6. To edit: preview, tell the user what will change, apply, then capture to verify. There is no dialog: the user's request is the approval, so apply only what they asked for, even while the designer is working.
 
 ## Editing the model
 

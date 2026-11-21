@@ -1,6 +1,6 @@
 # AutoCAD and SketchUp
 
-Agents can read and edit the drawing or model you have open in AutoCAD or SketchUp. Ask for an overview of the drawing, what is selected, or objects by layer, type, or area; capture the current view as an image; or have the agent draw, move, recolor, or retag objects. Every agent you use in T3 Code gets these tools without any setup in the agent itself, along with a built-in CAD guide on working safely and producing drawings that pass as your own. Nothing in your drawing changes until you approve it in the CAD app, and one Undo reverts each approved change.
+Agents can read and edit the drawing or model you have open in AutoCAD or SketchUp. Ask for an overview of the drawing, what is selected, or objects by layer, type, or area; capture the current view as an image; or have the agent draw, move, rotate, recolor, or retag objects. Every agent you use in T3 Code gets these tools without any setup in the agent itself, along with a built-in CAD guide on working safely and producing drawings that pass as your own. Nothing in your drawing changes until you ask for a change, and one Undo reverts each change the agent applies.
 
 ## Requirements
 
@@ -19,10 +19,10 @@ Agents can read and edit the drawing or model you have open in AutoCAD or Sketch
 
 1. You ask for a change. The agent prepares it and gets a preview of what each object looks like before and after. The preview never changes your drawing.
 2. The agent explains the change in the thread.
-3. When the agent applies it, AutoCAD or SketchUp shows a Yes/No dialog. It starts with how many objects each kind of change touches, such as "Erase 12 objects", and lists erases and moves first. Choose **Yes** to apply it or **No** to cancel. If the agent seems to be waiting, switch to the CAD app to answer the dialog.
-4. Each approved change is a single Undo step in the CAD app.
+3. The agent applies it right away, with no confirmation dialog in the CAD app: asking in the thread is your approval. It can land while you keep working, and the agent checks the result afterwards.
+4. Each applied change is a single Undo step in the CAD app.
 
-Each preview can be applied once, within 30 minutes. If the CAD app was busy or another drawing was in front, nothing happened and the agent can try the same preview again. If the objects it changes were edited since the preview, nothing is applied and the agent prepares a new preview. If you don't answer the dialog within 15 minutes, nothing is applied. If the agent reports that the outcome is unknown, for example because the CAD app stopped responding, check the drawing before asking it to try again.
+Each preview can be applied once, within 30 minutes. If the CAD app was busy or another drawing was in front, nothing happened and the agent can try the same preview again. If the objects it changes were edited since the preview, nothing is applied and the agent prepares a new preview. If the agent reports that the outcome is unknown, for example because the CAD app stopped responding, check the drawing before asking it to try again.
 
 ## Save a copy
 
@@ -30,7 +30,7 @@ Ask the agent to "save a copy" to keep a snapshot of your work. Copies are alway
 
 ## New drawings and exports
 
-Agents can also render a drawing to an image or a PDF, export it to DXF, or build a new DWG from a drawing they wrote, using AutoCAD's own engine in the background. They always work on a copy of the saved file: your open drawing never changes, so these need no approval. Because they read the last save, save first (Ctrl+S) if you want recent edits included; the agent is told when the open drawing has unsaved changes.
+Agents can also render a drawing to an image or a PDF, export it to DXF, or build a new DWG from a drawing they wrote, using AutoCAD's own engine in the background. They always work on a copy of the saved file: your open drawing never changes. Because they read the last save, save first (Ctrl+S) if you want recent edits included; the agent is told when the open drawing has unsaved changes.
 
 - Exports of your drawings go to T3 Code's own folder, and the agent tells you where. Drawings an agent builds from its own files go next to those files. Nothing replaces a file T3 Code did not write; only a thread with full access can choose another location.
 - A new DWG can use one of your drawings as a template: it gets your layers, text and dimension styles, and page setups, while your geometry is left out.
@@ -41,11 +41,11 @@ Agents can also render a drawing to an image or a PDF, export it to DXF, or buil
 - **AutoCAD**, in drawing units: add lines, polylines, circles, and text; create layers; move and erase objects; change an object's layer or color; change text and block attribute values.
 - **SketchUp**, in millimeters: add boxes; create tags and materials; move, erase, hide, or show objects; rename them; change an object's tag or material.
 
-Agents can't change objects inside a block definition in AutoCAD, or inside a component or group in SketchUp that appears more than once, because the edit would change every copy. Objects nested inside a SketchUp group or component that appears only once can be edited. Erasing a SketchUp edge also deletes the faces it bounds; the dialog says so. Objects on locked layers in AutoCAD, and locked objects or objects inside locked groups in SketchUp, are refused; unlock them first. Agents can't run commands, scripts, or plugins in the CAD apps.
+Agents can't change objects inside a block definition in AutoCAD, or inside a component or group in SketchUp that appears more than once, because the edit would change every copy. Objects nested inside a SketchUp group or component that appears only once can be edited. Erasing a SketchUp edge also deletes the faces it bounds; the preview says so. Objects on locked layers in AutoCAD, and locked objects or objects inside locked groups in SketchUp, are refused; unlock them first. Agents can't run commands, scripts, or plugins in the CAD apps.
 
 ## Privacy
 
-Drawing data, text, and screenshots that the agent reads are sent to the AI provider the thread uses, like anything else in the conversation. Work on copies of client projects when their terms require it. Files in a OneDrive, Dropbox, or other synced folder can change while you work if someone else edits them, so check the drawing before approving a change.
+Drawing data, text, and screenshots that the agent reads are sent to the AI provider the thread uses, like anything else in the conversation. Work on copies of client projects when their terms require it. Files in a OneDrive, Dropbox, or other synced folder can change while you work if someone else edits them, so check the drawing before asking for a change.
 
 ## Troubleshooting
 

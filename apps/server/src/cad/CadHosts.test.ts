@@ -174,7 +174,7 @@ it.layer(NodeServices.layer)("SketchUp connector", (it) => {
       // The test clock starts at 0, so the deadline is the timeout.
       expect(result).toEqual({
         method: "selection",
-        params: { documentId: DOCUMENT_ID, limit: 5, deadlineAt: 5_000, parentPid: process.pid },
+        params: { documentId: DOCUMENT_ID, limit: 5, deadlineAt: 5_000 },
       });
       expect(yield* Queue.take(bridge.requests)).toMatchObject({
         v: 1,

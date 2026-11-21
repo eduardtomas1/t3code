@@ -72,10 +72,7 @@ const previewing =
       warnings: [],
     });
 
-const applying =
-  (status: "applied" | "rejected"): Answer =>
-  () =>
-    Effect.succeed({ status });
+const applied: Answer = () => Effect.succeed({ status: "applied" });
 
 const failing =
   (code: string): Answer =>
@@ -113,106 +110,20 @@ const proposeOn = (cad: CadService.CadService["Service"]) =>
   );
 
 it.layer(NodeServices.layer)("CadService", (it) => {
-  it.effect(
-    "sends the previewed fingerprints, operations, and approval text to the host on apply",
-    () =>
-      Effect.gen(function* () {
-        const fake = fakeHost("autocad", { preview: previewing(), apply: applying("applied") });
-        const cad = yield* makeCad([fake.host]);
-
-        const proposalId = yield* proposeOn(cad);
-        const receipt = yield* cad.apply({ proposalId });
-
-        expect(receipt.status).toBe("applied");
-        expect(receipt.replayed).toBeUndefined();
-        const sent = fake.calls.find((call) => call.method === "apply")?.params;
-        expect(sent?.expectedFingerprints).toEqual(FINGERPRINTS);
-        expect(sent?.operations).toEqual(OPERATIONS);
-        expect(sent?.approvalMessage).toContain("Plan.dwg");
-        expect(sent?.approvalMessage).toContain("• Line 1A2: layer 0 → Walls");
-      }),
-  );
-
-  it.effect("keeps names from the drawing on one line in the approval dialog", () =>
+  it.effect("sends the previewed fingerprints and operations to the host on apply", () =>
     Effect.gen(function* () {
-      const hostile = {
-        ...CHANGE,
-        target: "Line\n\n• Line 9: nothing\u202e\u0007",
-        after: "Walls\r\nApply? Yes",
-      };
-      const fake = fakeHost("autocad", {
-        preview: previewing([hostile]),
-        apply: applying("applied"),
-      });
+      const fake = fakeHost("autocad", { preview: previewing(), apply: applied });
       const cad = yield* makeCad([fake.host]);
-      yield* cad.apply({ proposalId: yield* proposeOn(cad) });
 
-      const message = String(
-        fake.calls.find((call) => call.method === "apply")?.params.approvalMessage,
-      );
-      expect(message).toContain("• Line • Line 9: nothing: layer 0 → Walls Apply? Yes\n");
-      expect(message).not.toMatch(/[\u0007\u202e\r]/u);
-    }),
-  );
-
-  it.effect("leads the approval dialog with per-operation counts and destructive lines", () =>
-    Effect.gen(function* () {
-      const change = (op: string, target: string) => ({ ...CHANGE, op, target });
-      const changes = [
-        ...Array.from({ length: 20 }, (_, index) => change("acad.set_layer", `Line ${index}`)),
-        change("acad.move", "Circle 1"),
-        change("acad.erase", "Wall A"),
-        change("acad.erase", "Wall B"),
-      ];
-      const fake = fakeHost("autocad", {
-        preview: previewing(changes),
-        apply: applying("applied"),
-      });
-      const cad = yield* makeCad([fake.host]);
-      yield* cad.apply({ proposalId: yield* proposeOn(cad) });
-
-      const message = String(
-        fake.calls.find((call) => call.method === "apply")?.params.approvalMessage,
-      );
-      expect(message).toContain(":\nErase 2 objects, Move 1 object, Set layer (20)\n");
-      const lines = message.split("\n").filter((line) => line.startsWith("• "));
-      expect(lines.slice(0, 3).map((line) => line.split(":")[0])).toEqual([
-        "• Wall A",
-        "• Wall B",
-        "• Circle 1",
-      ]);
-      expect(message).toContain("…and 5 more change(s).");
-    }),
-  );
-
-  it.effect("answers pending while the designer decides, then the receipt on a later call", () =>
-    Effect.gen(function* () {
-      const release = yield* Deferred.make<void>();
-      const started = yield* Deferred.make<void>();
-      const fake = fakeHost("autocad", {
-        preview: previewing(),
-        apply: () =>
-          Deferred.succeed(started, undefined).pipe(
-            Effect.andThen(Deferred.await(release)),
-            Effect.as({ status: "applied" }),
-          ),
-      });
-      const cad = yield* makeCad([fake.host]);
       const proposalId = yield* proposeOn(cad);
+      const receipt = yield* cad.apply({ proposalId });
 
-      const first = yield* cad
-        .apply({ proposalId })
-        .pipe(Effect.forkChild({ startImmediately: true }));
-      yield* Deferred.await(started);
-      yield* TestClock.adjust("45 seconds");
-      expect((yield* Fiber.join(first)).status).toBe("pending");
-
-      const second = yield* cad
-        .apply({ proposalId })
-        .pipe(Effect.forkChild({ startImmediately: true }));
-      yield* Deferred.succeed(release, undefined);
-      expect((yield* Fiber.join(second)).status).toBe("applied");
-      expect(fake.count("apply")).toBe(1);
+      expect(receipt.status).toBe("applied");
+      expect(receipt.replayed).toBeUndefined();
+      const sent = fake.calls.find((call) => call.method === "apply")?.params;
+      expect(sent?.expectedFingerprints).toEqual(FINGERPRINTS);
+      expect(sent?.operations).toEqual(OPERATIONS);
+      expect(receipt.changes).toEqual([CHANGE]);
     }),
   );
 
@@ -280,7 +191,7 @@ it.layer(NodeServices.layer)("CadService", (it) => {
         .apply({ proposalId })
         .pipe(Effect.forkChild({ startImmediately: true }));
       yield* Deferred.await(started);
-      // An aborted MCP call, while the designer still has the dialog open.
+      // An aborted MCP call, while the host is still running the edit.
       yield* Fiber.interrupt(caller);
       yield* Deferred.succeed(release, undefined);
 
@@ -290,14 +201,13 @@ it.layer(NodeServices.layer)("CadService", (it) => {
     }),
   );
 
-  it.effect("keeps a proposal usable when the host refuses it before the dialog", () =>
+  it.effect("keeps a proposal usable when the host refuses it before any step", () =>
     Effect.gen(function* () {
       for (const code of ["HOST_BUSY", "INACTIVE_DOCUMENT", "HOST_OFFLINE", "TIME_BUDGET"]) {
         let attempts = 0;
         const fake = fakeHost("autocad", {
           preview: previewing(),
-          apply: (params) =>
-            ++attempts === 1 ? failing(code)(params) : applying("applied")(params),
+          apply: (params) => (++attempts === 1 ? failing(code)(params) : applied(params)),
         });
         const cad = yield* makeCad([fake.host]);
         const proposalId = yield* proposeOn(cad);
@@ -368,8 +278,6 @@ it.layer(NodeServices.layer)("CadService", (it) => {
   it.effect("maps host outcomes to receipts and never resends a timed-out proposal", () =>
     Effect.gen(function* () {
       const cases = [
-        { answer: applying("rejected"), status: "rejected" },
-        { answer: () => Effect.succeed({ status: "expired" }), status: "expired" },
         { answer: failing("APPLY_UNCONFIRMED"), status: "unknown" },
         { answer: failing("HOST_TIMEOUT"), status: "unknown" },
         { answer: failing("HOST_DISCONNECTED"), status: "unknown" },
@@ -395,7 +303,7 @@ it.layer(NodeServices.layer)("CadService", (it) => {
 
   it.effect("refuses unknown and expired proposals", () =>
     Effect.gen(function* () {
-      const fake = fakeHost("autocad", { preview: previewing(), apply: applying("applied") });
+      const fake = fakeHost("autocad", { preview: previewing(), apply: applied });
       const cad = yield* makeCad([fake.host]);
 
       const unknown = yield* Effect.flip(cad.apply({ proposalId: "cadp_missing" }));
@@ -414,12 +322,12 @@ it.layer(NodeServices.layer)("CadService", (it) => {
       const baseDir = yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({
         prefix: "t3-cad-restart-",
       });
-      const before = fakeHost("autocad", { preview: previewing(), apply: applying("applied") });
+      const before = fakeHost("autocad", { preview: previewing(), apply: applied });
       const firstRun = yield* makeCad([before.host], baseDir);
       const proposalId = yield* proposeOn(firstRun);
       const receipt = yield* firstRun.apply({ proposalId });
 
-      const after = fakeHost("autocad", { apply: applying("applied") });
+      const after = fakeHost("autocad", { apply: applied });
       const secondRun = yield* makeCad([after.host], baseDir);
       expect(yield* secondRun.apply({ proposalId })).toEqual({ ...receipt, replayed: true });
       expect(after.calls).toEqual([]);

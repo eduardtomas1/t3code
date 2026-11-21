@@ -209,15 +209,12 @@ const sketchUpVersionFolders = (base: string | undefined) =>
       .toSorted((a, b) => a.version.localeCompare(b.version));
   });
 
-/**
- * When T3 stops waiting, and which process waits, so a bridge never acts on a request nobody
- * will read: AutoCAD closes its dialog in time, and SketchUp refuses a late approval.
- */
+/** When T3 stops waiting, so a bridge never starts work on a request nobody will read. */
 const withDeadline = (
   params: Readonly<Record<string, unknown>>,
   now: number,
   timeoutMs: number,
-) => ({ ...params, deadlineAt: now + timeoutMs, parentPid: process.pid });
+) => ({ ...params, deadlineAt: now + timeoutMs });
 
 const sketchUpRequest = (
   endpoint: SketchUpEndpoint,

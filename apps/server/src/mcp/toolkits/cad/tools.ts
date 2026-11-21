@@ -57,6 +57,8 @@ export const CadOperation = Schema.Union([
     value: Schema.String.check(Schema.isMaxLength(500)),
   }),
   op("acad.move", { handles: Handles, vector: Point }),
+  op("acad.set_rotation", { handles: Handles, rotationDeg: Schema.Finite }),
+  op("acad.rotate", { handles: Handles, basePoint: Point, angleDeg: Schema.Finite }),
   op("acad.erase", { handles: Handles }),
   op("acad.add_line", { start: Point, end: Point, layer: Layer }),
   op("acad.add_polyline", {
@@ -256,7 +258,7 @@ export const CadCaptureTool = Tool.make("cad_capture_view", {
 
 const CadPreviewTool = Tool.make("cad_preview_changes", {
   description:
-    "Check an edit without changing anything; returns a short-lived `proposalId` with every before/after value. Targets come from reads; only top-level or unshared objects can be edited. A proposal covers exactly these operations; if the request changes, preview again and apply the new proposalId. Tell the designer what will change, then call cad_apply_changes. AutoCAD ops (drawing units, see cad_document_info): acad.create_layer{name,color?} set_layer{handles,layer} set_color{handles,color} set_text{handles,text} set_attribute{handles,tag,value} move{handles,vector} erase{handles} add_line{start,end,layer?} add_polyline{points,closed?,layer?} add_circle{center,radius,layer?} add_text{position,height,text,rotationDeg?,layer?}. SketchUp ops (always mm): skp.create_tag{name} create_material{name,color,alpha?} set_tag{ids,tag} set_material{ids,material} rename{ids,name} move{ids,vectorMm} set_hidden{ids,hidden} erase{ids} add_box{originMm,sizeMm,name?,tag?,material?}.",
+    "Check an edit without changing anything; returns a short-lived `proposalId` with every before/after value. Targets come from reads; only top-level or unshared objects can be edited. A proposal covers exactly these operations; if the request changes, preview again and apply the new proposalId. Tell the user what will change, then call cad_apply_changes. AutoCAD ops (drawing units, see cad_document_info): acad.create_layer{name,color?} set_layer{handles,layer} set_color{handles,color} set_text{handles,text} set_attribute{handles,tag,value} move{handles,vector} set_rotation{handles,rotationDeg} rotate{handles,basePoint,angleDeg} erase{handles} add_line{start,end,layer?} add_polyline{points,closed?,layer?} add_circle{center,radius,layer?} add_text{position,height,text,rotationDeg?,layer?}. SketchUp ops (always mm): skp.create_tag{name} create_material{name,color,alpha?} set_tag{ids,tag} set_material{ids,material} rename{ids,name} move{ids,vectorMm} set_hidden{ids,hidden} erase{ids} add_box{originMm,sizeMm,name?,tag?,material?}.",
   parameters: Schema.Struct({
     documentId: DocumentId,
     operations: Schema.Array(CadOperation).check(Schema.isMinLength(1), Schema.isMaxLength(50)),
@@ -278,7 +280,7 @@ const CadPreviewTool = Tool.make("cad_preview_changes", {
 
 const CadApplyTool = Tool.make("cad_apply_changes", {
   description:
-    "Apply a previewed change. The designer approves or declines it in a dialog inside the CAD app; one undo reverts it. A proposal is used once: retrying the same `proposalId` returns its first outcome. `pending`: the designer has not answered yet; call again with the same proposalId to keep waiting. `rejected` or `expired`: nothing changed; don't retry unless asked. `partial`: tell the designer which changes landed. `unknown`: ask the designer to check the drawing. While its dialog is open, reads of that app wait or time out, so call cad_apply_changes again rather than reading. Never preview and re-apply the same edit until the designer confirms it isn't in the drawing.",
+    "Apply a previewed change now, in the open document, as one undo step; there is no dialog. Apply only what the user asked for in this conversation. A proposal is used once: retrying the same `proposalId` returns its first outcome. Then tell the user what changed. `partial`: say which changes landed. `unknown`: ask the designer to check the drawing. Never preview and re-apply the same edit until the designer confirms it isn't in the drawing.",
   parameters: Schema.Struct({ proposalId: Schema.String.check(Schema.isMaxLength(64)) }),
   success: CadService.CadApplyResult,
   failure,

@@ -41,7 +41,6 @@ const fakeAutoCad = (applied: Array<unknown>): CadHost => ({
       case "preview":
         return Effect.succeed({
           documentId,
-          documentName: "Plan.dwg",
           changes: [
             {
               op: "acad.set_layer",
@@ -164,7 +163,7 @@ it.effect("previews, applies once, and reports host failures as tool errors", ()
       expect(applied).toHaveLength(1);
       expect(applied[0]).toMatchObject({
         expectedFingerprints: { "entity:1A": "abc" },
-        approvalMessage: expect.stringContaining("LINE 1A: layer 0 → A-WALL"),
+        operations: [{ op: "acad.set_layer", handles: ["1A"], layer: "A-WALL" }],
       });
 
       const setup = yield* call("cad_setup", { app: "autocad" });
@@ -203,7 +202,7 @@ it.effect("read-only clients can read the guide and preview but never apply", ()
   }),
 );
 
-it.effect("fenced linked work may apply approved edits but not write files or install", () =>
+it.effect("fenced linked work may preview but not apply edits, write files or install", () =>
   Effect.gen(function* () {
     const applied: Array<unknown> = [];
     yield* Effect.gen(function* () {
@@ -212,10 +211,9 @@ it.effect("fenced linked work may apply approved edits but not write files or in
         operations: [{ op: "acad.set_layer", handles: ["1A"], layer: "A-WALL" }],
       });
       const proposalId = (preview.result as { proposalId: string }).proposalId;
-      const apply = yield* call("cad_apply_changes", { proposalId });
-      expect(apply.result).toMatchObject({ status: "applied" });
 
       for (const [name, params] of [
+        ["cad_apply_changes", { proposalId }],
         ["cad_save_copy", { documentId }],
         ["cad_setup", { app: "sketchup" }],
       ] as const) {
@@ -229,6 +227,7 @@ it.effect("fenced linked work may apply approved edits but not write files or in
         isFailure: true,
         result: { code: "capability_denied" },
       });
+      expect(applied).toHaveLength(0);
     }).pipe(run(applied, linkedClient));
   }),
 );

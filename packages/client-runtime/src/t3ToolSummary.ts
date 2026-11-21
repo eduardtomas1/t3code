@@ -1225,12 +1225,11 @@ export function summarizeT3ToolCalls(
       break;
     }
     case "cad-apply": {
-      // The designer approves or declines in the CAD app, so a completed call may have changed nothing.
       const count = selected.length;
       label = done
         ? resolve(
             msg(
-              "{count, plural, one {Asked to apply {count} CAD change} other {Asked to apply {count} CAD changes}}",
+              "{count, plural, one {Applied {count} CAD change} other {Applied {count} CAD changes}}",
               { count },
             ),
           )
