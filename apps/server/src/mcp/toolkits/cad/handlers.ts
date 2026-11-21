@@ -1,33 +1,42 @@
+import { OrchestratorMcpFailure } from "@t3tools/contracts";
 import * as Effect from "effect/Effect";
 
 import * as CadService from "../../../cad/CadService.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
+import { loadCaller } from "../../threadAccess.ts";
 import { CadCaptureToolkit, CadStandardToolkit, type CadToolkit } from "./tools.ts";
 
 const DEFAULT_CAPTURE_SIZE = 1280;
 
+// The server writes these files itself, outside any provider sandbox, so only a thread that may
+// already write anywhere chooses where.
+const requireFullAccess = (refusal: string) =>
+  Effect.flatMap(loadCaller(), ({ limits }) =>
+    limits.runtimeMode === "full-access"
+      ? Effect.void
+      : Effect.fail(new OrchestratorMcpFailure({ code: "capability_denied", message: refusal })),
+  );
+
 const handlers = {
   cad_status: McpToolAccess.reads(({ app }) =>
-    Effect.gen(function* () {
-      const status = yield* (yield* CadService.CadService).status;
-      return app === undefined
-        ? status
-        : {
-            hosts: status.hosts.filter((host) => host.app === app),
-            documents: status.documents.filter((document) => document.app === app),
-          };
-    }),
+    Effect.flatMap(CadService.CadService, (cad) => cad.status(app)),
   ),
-  // Writes only T3's own extension files into SketchUp's Plugins folder.
+  // Installs code SketchUp runs on this computer, which fenced linked work may not change.
   cad_setup: McpToolAccess.writes(
-    ({ app }) => Effect.flatMap(CadService.CadService, (cad) => cad.setup(app)),
-    { linkedCallers: "allowed" },
+    ({ app }) =>
+      requireFullAccess(
+        "Only full-access threads can install the SketchUp extension. Ask the designer to run setup from one, or to install T3CodeCadBridge.rbz by hand.",
+      ).pipe(Effect.andThen(Effect.flatMap(CadService.CadService, (cad) => cad.setup(app)))),
+    { linkedCallers: { refused: "install extensions into CAD apps on this computer" } },
   ),
   cad_get_selection: McpToolAccess.reads((input) =>
     Effect.flatMap(CadService.CadService, (cad) => cad.selection(input)),
   ),
   cad_query_objects: McpToolAccess.reads((input) =>
     Effect.flatMap(CadService.CadService, (cad) => cad.query(input)),
+  ),
+  cad_document_info: McpToolAccess.reads((input) =>
+    Effect.flatMap(CadService.CadService, (cad) => cad.info(input)),
   ),
   cad_preview_changes: McpToolAccess.reads((input) =>
     Effect.flatMap(CadService.CadService, (cad) => cad.preview(input)),
@@ -37,9 +46,16 @@ const handlers = {
     (input) => Effect.flatMap(CadService.CadService, (cad) => cad.apply(input)),
     { linkedCallers: "allowed" },
   ),
+  // Writes a new file on this computer, which fenced linked work may not.
   cad_save_copy: McpToolAccess.writes(
-    (input) => Effect.flatMap(CadService.CadService, (cad) => cad.saveCopy(input)),
-    { linkedCallers: "allowed" },
+    (input) =>
+      (input.destination === undefined
+        ? Effect.void
+        : requireFullAccess(
+            "Only full-access threads can choose where a copy goes. Omit destination to save it next to the original.",
+          )
+      ).pipe(Effect.andThen(Effect.flatMap(CadService.CadService, (cad) => cad.saveCopy(input)))),
+    { linkedCallers: { refused: "write files on this computer" } },
   ),
   cad_capture_view: McpToolAccess.reads((input) =>
     Effect.gen(function* () {

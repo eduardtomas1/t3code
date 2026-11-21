@@ -27,6 +27,7 @@ import {
   OrchestrationV2LinkedSender,
   ThreadId,
 } from "@t3tools/contracts";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import packageJson from "../../package.json" with { type: "json" };
 import { parseBearerToken } from "../auth/EnvironmentAuth.ts";
@@ -1409,10 +1410,17 @@ export const layerDeviceToolkit = Layer.mergeAll(
   layerDeviceScreenshotRegistration,
 );
 
-const layerCadToolkit = Layer.mergeAll(
+const layerCadRegistrations = Layer.mergeAll(
   toolkitRegistration(CadStandardToolkit, CadHandlers.layerStandard),
   imageToolRegistration(registerCadCapture(), CadHandlers.layerCapture),
 ).pipe(Layer.provide(CadService.layer), Layer.provide(CadHosts.layer));
+
+// AutoCAD and SketchUp desktop run only on Windows and macOS; elsewhere the tools would only cost context.
+const layerCadToolkit = Layer.unwrap(
+  Effect.map(HostProcess.Platform, (platform) =>
+    platform === "win32" || platform === "darwin" ? layerCadRegistrations : Layer.empty,
+  ),
+);
 
 /**
  * `McpServer` for in-process calls, which provide `McpInvocationContext`

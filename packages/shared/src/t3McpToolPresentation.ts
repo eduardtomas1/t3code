@@ -88,7 +88,9 @@ export type T3McpToolSummaryAction =
   | "device"
   | "html-preview"
   | "html-render"
-  | "send-to-user";
+  | "send-to-user"
+  | "cad"
+  | "cad-apply";
 
 export interface T3McpToolDefinition {
   readonly displayName: string;
@@ -440,6 +442,16 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   html_preview: tool(["Preview", "Previewing", "Previewed", "an HTML page"], "html-preview"),
   html_render: tool(["Render", "Rendering", "Rendered", "an HTML page"], "html-render"),
   send_to_user: tool(["Send", "Sending", "Sent", "a message"], "send-to-user"),
+  cad_status: tool(["Check", "Checking", "Checked", "CAD apps"], "cad"),
+  cad_setup: tool(["Set up", "Setting up", "Set up", "CAD apps"], "cad"),
+  cad_get_selection: tool(["Read", "Reading", "Read", "the CAD selection"], "cad"),
+  cad_query_objects: tool(["Find", "Finding", "Found", "CAD objects"], "cad"),
+  cad_document_info: tool(["Read", "Reading", "Read", "CAD document info"], "cad"),
+  cad_capture_view: tool(["Capture", "Capturing", "Captured", "the CAD view"], "cad"),
+  cad_preview_changes: tool(["Preview", "Previewing", "Previewed", "a CAD change"], "cad"),
+  // The designer decides in the CAD app, so a finished call may have changed nothing.
+  cad_apply_changes: tool(["Apply", "Applying", "Asked to apply", "a CAD change"], "cad-apply"),
+  cad_save_copy: tool(["Save", "Saving", "Saved", "a CAD copy"], "cad"),
 };
 
 export const T3_MCP_TOOL_NAMES: ReadonlySet<string> = new Set(Object.keys(T3_MCP_TOOLS));

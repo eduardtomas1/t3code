@@ -2,9 +2,9 @@
 import * as NodeCrypto from "node:crypto";
 import * as NodeFSP from "node:fs/promises";
 import * as NodeNet from "node:net";
-import * as NodeOS from "node:os";
 import * as NodePath from "node:path";
 
+import * as Clock from "effect/Clock";
 import * as Config from "effect/Config";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Context from "effect/Context";
@@ -76,6 +76,7 @@ export type CadBridgeMethod =
   | "documents"
   | "selection"
   | "query"
+  | "info"
   | "capture"
   | "preview"
   | "apply"
@@ -102,8 +103,12 @@ export class CadHosts extends Context.Service<
   { readonly hosts: ReadonlyArray<CadHost> }
 >()("t3/cad/CadHosts") {}
 
-/** Bumped with the bridges; status flags installs older than this. */
-export const BRIDGE_VERSION = "1.0.0";
+const bridgeVersionOf = (source: string) => /BRIDGE_VERSION = '([^']+)'/u.exec(source)?.[1];
+
+/** The embedded SketchUp bridge's version; status flags installs that differ. */
+export const BRIDGE_VERSION = bridgeVersionOf(SKETCHUP_MAIN_RB) ?? "unknown";
+/** SketchUp 2017-2019 run a Ruby that lacks APIs the bridge uses. */
+const MIN_SKETCHUP_VERSION = "2020";
 const PROTOCOL = 1;
 const MAX_RESPONSE_BYTES = 48 * 1024 * 1024;
 const STATUS_TIMEOUT_MS = 8_000;
@@ -129,13 +134,19 @@ const decodeDocuments = (app: CadApp) => (value: unknown) =>
     ),
   );
 
-const unwrapResponse = (raw: string, app: CadApp) =>
+/**
+ * The request reached the host, but its answer was unreadable or too large, so it may still have
+ * run. Callers treat it like `HOST_TIMEOUT`, never as "not applied".
+ */
+export const HOST_UNREADABLE = "HOST_UNREADABLE";
+
+const unwrapResponse = (raw: string, app: CadApp, diagnostics = "") =>
   decodeBridgeResponse(raw).pipe(
     Effect.mapError(
       () =>
         new CadError({
-          code: "HOST_ERROR",
-          message: `The ${appLabel(app)} bridge sent an unreadable answer.`,
+          code: HOST_UNREADABLE,
+          message: `The ${appLabel(app)} bridge sent an unreadable answer.${diagnostics}`,
         }),
     ),
     Effect.flatMap((response) =>
@@ -151,8 +162,6 @@ const unwrapResponse = (raw: string, app: CadApp) =>
   );
 
 export const appLabel = (app: CadApp) => (app === "autocad" ? "AutoCAD" : "SketchUp");
-
-const bridgeVersionOf = (source: string) => /BRIDGE_VERSION = '([^']+)'/u.exec(source)?.[1];
 
 const SketchUpDiscovery = Schema.Struct({
   app: Schema.Literal("sketchup"),
@@ -200,13 +209,23 @@ const sketchUpVersionFolders = (base: string | undefined) =>
       .toSorted((a, b) => a.version.localeCompare(b.version));
   });
 
+/**
+ * When T3 stops waiting, and which process waits, so a bridge never acts on a request nobody
+ * will read: AutoCAD closes its dialog in time, and SketchUp refuses a late approval.
+ */
+const withDeadline = (
+  params: Readonly<Record<string, unknown>>,
+  now: number,
+  timeoutMs: number,
+) => ({ ...params, deadlineAt: now + timeoutMs, parentPid: process.pid });
+
 const sketchUpRequest = (
   endpoint: SketchUpEndpoint,
   method: string,
   params: Readonly<Record<string, unknown>>,
   timeoutMs: number,
 ) =>
-  Effect.suspend(() => {
+  Effect.flatMap(Clock.currentTimeMillis, (now) => {
     // Whether the request left this process decides between "not applied" and "unknown".
     const progress = { sent: false };
     const lost = (code: string, message: string) =>
@@ -219,13 +238,13 @@ const sketchUpRequest = (
       socket.on("connect", () => {
         progress.sent = true;
         socket.write(
-          `${JSON.stringify({ v: PROTOCOL, id: NodeCrypto.randomUUID(), token: endpoint.token, method, params })}\n`,
+          `${JSON.stringify({ v: PROTOCOL, id: NodeCrypto.randomUUID(), token: endpoint.token, method, params: withDeadline(params, now, timeoutMs) })}\n`,
         );
       });
       socket.on("data", (chunk: string) => {
         received += chunk;
         if (received.length > MAX_RESPONSE_BYTES) {
-          return fail("HOST_ERROR", "SketchUp sent more data than T3 accepts.");
+          return fail(HOST_UNREADABLE, "SketchUp sent more data than T3 accepts.");
         }
         const end = received.indexOf("\n");
         if (end < 0) return;
@@ -282,7 +301,7 @@ export const makeSketchUpHost = (home: string, settingsBase: string | undefined)
       ),
     );
 
-  const endpointFor = Effect.fnUntraced(function* (documentId: string) {
+  const endpointFor = Effect.fn("CadHosts.sketchUpEndpoint")(function* (documentId: string) {
     const pid = Number(/^skp:(\d+):/u.exec(documentId)?.[1]);
     const endpoint = (yield* endpoints).find((candidate) => candidate.pid === pid);
     if (endpoint === undefined) {
@@ -296,28 +315,30 @@ export const makeSketchUpHost = (home: string, settingsBase: string | undefined)
 
   const status: Effect.Effect<CadHostStatus> = Effect.gen(function* () {
     const live = yield* endpoints;
-    const folders = yield* sketchUpVersionFolders(settingsBase);
-    const installed = yield* Effect.forEach(folders, (folder) => installedVersion(folder.plugins));
-    const anyInstalled = installed.some((version) => version !== undefined);
-    const outdated = installed.some(
-      (version) => version !== undefined && version !== BRIDGE_VERSION,
-    );
     if (live.length === 0) {
-      if (folders.length === 0) {
+      // The newest SketchUp is the one the designer opens, so its copy decides.
+      const newest = (yield* sketchUpVersionFolders(settingsBase)).at(-1);
+      if (newest === undefined || newest.version < MIN_SKETCHUP_VERSION) {
         return {
           app: "sketchup",
           state: "not_installed",
-          hint: "SketchUp Pro desktop was not found. Open it once after installing so it creates its settings folder.",
+          hint:
+            newest === undefined
+              ? "SketchUp Pro desktop was not found. Open it once after installing so it creates its settings folder."
+              : `T3 needs SketchUp ${MIN_SKETCHUP_VERSION} or newer; only SketchUp ${newest.version} was found.`,
           documents: [],
         } as const;
       }
+      const installed = yield* installedVersion(newest.plugins);
       return {
         app: "sketchup",
-        state: anyInstalled && !outdated ? "not_running" : "setup_required",
+        state: installed === BRIDGE_VERSION ? "not_running" : "setup_required",
         hint:
-          anyInstalled && !outdated
+          installed === BRIDGE_VERSION
             ? "Open SketchUp (restart it if it was open while the extension was installed)."
-            : "Call cad_setup to install the SketchUp extension, then restart SketchUp.",
+            : installed === undefined
+              ? `Call cad_setup to install the extension for SketchUp ${newest.version}, then restart SketchUp.`
+              : "The SketchUp extension is outdated. Call cad_setup, then restart SketchUp.",
         documents: [],
       } as const;
     }
@@ -348,12 +369,15 @@ export const makeSketchUpHost = (home: string, settingsBase: string | undefined)
   });
 
   const setup: Effect.Effect<CadSetupResult, CadError> = Effect.gen(function* () {
-    const folders = yield* sketchUpVersionFolders(settingsBase);
+    const found = yield* sketchUpVersionFolders(settingsBase);
+    const folders = found.filter((folder) => folder.version >= MIN_SKETCHUP_VERSION);
     if (folders.length === 0) {
       return yield* new CadError({
         code: "NOT_INSTALLED",
         message:
-          "SketchUp desktop was not found. Install SketchUp Pro or Studio and open it once, then run setup again.",
+          found.length === 0
+            ? "SketchUp desktop was not found. Install SketchUp Pro or Studio and open it once, then run setup again."
+            : `T3 needs SketchUp ${MIN_SKETCHUP_VERSION} or newer; only SketchUp ${found.map((folder) => folder.version).join(", ")} was found.`,
       });
     }
     yield* Effect.tryPromise({
@@ -404,13 +428,21 @@ const autoCadUnsupported = new CadError({
   message: "AutoCAD automation needs full AutoCAD on Windows.",
 });
 
+/** Why PowerShell printed no JSON, such as an execution policy that refuses the script. */
+const autoCadDiagnostics = (output: ProcessRunner.ProcessRunOutput) => {
+  const stderr = output.stderr.trim();
+  return ` PowerShell exited with code ${output.code ?? "unknown"}${stderr === "" ? "." : `: ${stderr.slice(-500)}`}`;
+};
+
 const AUTOCAD_STATES: Readonly<Record<string, CadHostStatus["state"]>> = {
   HOST_OFFLINE: "not_running",
+  HOST_UNAVAILABLE: "not_running",
   NOT_INSTALLED: "not_installed",
   HOST_BUSY: "busy",
 };
 
-const makeAutoCadHost = Effect.fnUntraced(function* (
+/** Exported so tests can drive it with a fake process runner. */
+export const makeAutoCadHost = Effect.fn("CadHosts.makeAutoCadHost")(function* (
   platform: NodeJS.Platform,
   stateDir: string,
   powershell: string,
@@ -423,14 +455,31 @@ const makeAutoCadHost = Effect.fnUntraced(function* (
   const scriptPath = NodePath.join(stateDir, "cad", `T3CadBridge-${digest}.ps1`);
 
   // Windows PowerShell 5.1 reads a script without a byte-order mark in the ANSI code page.
+  const script = `﻿${AUTOCAD_BRIDGE_PS1}`;
+  // Checked once per server run: a damaged or edited copy is replaced before PowerShell runs it.
+  let verified = false;
   const ensureScript = Effect.tryPromise({
     try: async () => {
-      const existing = await NodeFSP.stat(scriptPath).catch(() => undefined);
-      if (existing !== undefined) return;
+      if (verified) return;
+      const existing = await NodeFSP.readFile(scriptPath, "utf8").catch(() => undefined);
+      if (existing === script) {
+        verified = true;
+        return;
+      }
       await NodeFSP.mkdir(NodePath.dirname(scriptPath), { recursive: true });
-      const temporary = `${scriptPath}.${process.pid}.tmp`;
-      await NodeFSP.writeFile(temporary, `\uFEFF${AUTOCAD_BRIDGE_PS1}`);
-      await NodeFSP.rename(temporary, scriptPath);
+      const temporary = `${scriptPath}.${process.pid}.${NodeCrypto.randomBytes(6).toString("hex")}.tmp`;
+      await NodeFSP.writeFile(temporary, script);
+      try {
+        await NodeFSP.rename(temporary, scriptPath);
+      } catch (error) {
+        // A concurrent first call may have put the same script there, and Windows refuses to
+        // replace a file another PowerShell is reading.
+        await NodeFSP.rm(temporary, { force: true });
+        if ((await NodeFSP.readFile(scriptPath, "utf8").catch(() => undefined)) !== script) {
+          throw error;
+        }
+      }
+      verified = true;
     },
     catch: () =>
       new CadError({ code: "SETUP_FAILED", message: "Could not write the AutoCAD bridge script." }),
@@ -444,7 +493,8 @@ const makeAutoCadHost = Effect.fnUntraced(function* (
     platform !== "win32"
       ? Effect.fail(autoCadUnsupported)
       : ensureScript.pipe(
-          Effect.andThen(
+          Effect.andThen(Clock.currentTimeMillis),
+          Effect.flatMap((now) =>
             runner.run({
               command: powershell,
               args: [
@@ -457,7 +507,12 @@ const makeAutoCadHost = Effect.fnUntraced(function* (
                 "-File",
                 scriptPath,
               ],
-              stdin: JSON.stringify({ v: PROTOCOL, id: NodeCrypto.randomUUID(), method, params }),
+              stdin: JSON.stringify({
+                v: PROTOCOL,
+                id: NodeCrypto.randomUUID(),
+                method,
+                params: withDeadline(params, now, timeoutMs),
+              }),
               timeout: `${timeoutMs} millis`,
               maxOutputBytes: MAX_RESPONSE_BYTES,
             }),
@@ -487,7 +542,7 @@ const makeAutoCadHost = Effect.fnUntraced(function* (
             ProcessOutputLimitError: () =>
               Effect.fail(
                 new CadError({
-                  code: "HOST_ERROR",
+                  code: HOST_UNREADABLE,
                   message: "AutoCAD sent more data than T3 accepts.",
                 }),
               ),
@@ -499,7 +554,9 @@ const makeAutoCadHost = Effect.fnUntraced(function* (
                 }),
               ),
           }),
-          Effect.flatMap((output) => unwrapResponse(output.stdout.trim(), "autocad")),
+          Effect.flatMap((output) =>
+            unwrapResponse(output.stdout.trim(), "autocad", autoCadDiagnostics(output)),
+          ),
         );
 
   const status: Effect.Effect<CadHostStatus> =
@@ -563,7 +620,7 @@ export const layer = Layer.effect(
     const platform = yield* HostProcess.Platform;
     const appData = yield* Config.option(Config.String("APPDATA"));
     const systemRoot = yield* Config.option(Config.String("SystemRoot"));
-    const home = NodeOS.homedir();
+    const home = yield* HostProcess.HomeDirectory;
     return CadHosts.of({
       hosts: [
         yield* makeAutoCadHost(
