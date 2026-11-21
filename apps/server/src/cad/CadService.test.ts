@@ -439,6 +439,26 @@ it.layer(NodeServices.layer)("CadService", (it) => {
     }),
   );
 
+  it.effect("passes capture view control to AutoCAD and refuses it for SketchUp", () =>
+    Effect.gen(function* () {
+      const capturing: Answer = (params) =>
+        Effect.succeed({ documentId: params.documentId, width: 1, height: 1, pngBase64: "" });
+      const autocad = fakeHost("autocad", { capture: capturing });
+      const sketchup = fakeHost("sketchup", { capture: capturing });
+      const cad = yield* makeCad([autocad.host, sketchup.host]);
+      const bbox = { min: [0, 0], max: [10, 10] };
+
+      yield* cad.capture({ documentId: DOC, maxWidth: 64, maxHeight: 64, bbox });
+      expect(autocad.calls[0]?.params).toMatchObject({ bbox });
+
+      const refused = yield* Effect.flip(
+        cad.capture({ documentId: "skp:1", maxWidth: 64, maxHeight: 64, extents: true }),
+      );
+      expect(refused.code).toBe("INVALID_REQUEST");
+      expect(sketchup.count("capture")).toBe(0);
+    }),
+  );
+
   it.effect("saves a copy next to the drawing by default and validates destinations", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;

@@ -91,6 +91,18 @@ const HostCapture = Schema.Struct({
 
 const HostRecord = Schema.Record(Schema.String, Schema.Unknown);
 
+// A type alias, not an interface, so it still fits the bridge's Record params.
+type CaptureInput = {
+  readonly documentId: string;
+  readonly maxWidth: number;
+  readonly maxHeight: number;
+  readonly extents?: boolean;
+  readonly bbox?: {
+    readonly min: ReadonlyArray<number>;
+    readonly max: ReadonlyArray<number>;
+  };
+};
+
 export const CadReceipt = Schema.Struct({
   proposalId: Schema.String,
   documentId: Schema.String,
@@ -151,11 +163,7 @@ export class CadService extends Context.Service<
     readonly info: (input: {
       readonly documentId: string;
     }) => Effect.Effect<Readonly<Record<string, unknown>>, CadError>;
-    readonly capture: (input: {
-      readonly documentId: string;
-      readonly maxWidth: number;
-      readonly maxHeight: number;
-    }) => Effect.Effect<typeof HostCapture.Type, CadError>;
+    readonly capture: (input: CaptureInput) => Effect.Effect<typeof HostCapture.Type, CadError>;
     readonly preview: (input: {
       readonly documentId: string;
       readonly operations: ReadonlyArray<CadOperation>;
@@ -415,12 +423,14 @@ const make = Effect.gen(function* () {
     return yield* read("info", input);
   });
 
-  const capture = Effect.fn("CadService.capture")(function* (input: {
-    readonly documentId: string;
-    readonly maxWidth: number;
-    readonly maxHeight: number;
-  }) {
+  const capture = Effect.fn("CadService.capture")(function* (input: CaptureInput) {
     const host = yield* hostFor(input.documentId);
+    if (host.app !== "autocad" && (input.extents === true || input.bbox !== undefined)) {
+      return yield* new CadError({
+        code: "INVALID_REQUEST",
+        message: `extents and bbox work only in AutoCAD; ${CadHosts.appLabel(host.app)} captures its current view.`,
+      });
+    }
     const result = yield* host.call("capture", input, {
       documentId: input.documentId,
       timeoutMs: READ_TIMEOUT_MS,

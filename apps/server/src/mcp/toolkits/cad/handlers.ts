@@ -63,6 +63,8 @@ const handlers = {
         documentId: input.documentId,
         maxWidth: input.maxWidth ?? DEFAULT_CAPTURE_SIZE,
         maxHeight: input.maxHeight ?? DEFAULT_CAPTURE_SIZE,
+        ...(input.extents === undefined ? {} : { extents: input.extents }),
+        ...(input.bbox === undefined ? {} : { bbox: input.bbox }),
       });
       return {
         documentId: capture.documentId,

@@ -6,9 +6,13 @@ $env:T3_CAD_BRIDGE_TEST = '1'
 . (Join-Path $PSScriptRoot 'T3CadBridge.ps1')
 
 $script:Failures = 0
+# PowerShell 7 writes whole doubles as 2.0 where 5.1 writes 2, so numbers compare by value.
+function ConvertTo-Comparable($Value) {
+  return (ConvertTo-Json -InputObject $Value -Depth 8 -Compress) -replace '(?<=\d)\.0+(?=[,\]\}]|$)', ''
+}
 function Assert-Equal($Expected, $Actual, [string]$Message) {
-  $left = ConvertTo-Json -InputObject $Expected -Depth 8 -Compress
-  $right = ConvertTo-Json -InputObject $Actual -Depth 8 -Compress
+  $left = ConvertTo-Comparable $Expected
+  $right = ConvertTo-Comparable $Actual
   if ($left -ne $right) {
     $script:Failures++
     Write-Host "FAIL: $Message`n  expected $left`n  actual   $right"
@@ -111,12 +115,13 @@ function New-FakeAutoCAD([string]$Name = 'Plan.dwg', [switch]$Empty) {
     Undo = (New-Object System.Collections.ArrayList); Registry = $registry; NextHandle = 500; Pickfirst = @(); DeletedSets = 0
     ActiveLayout = [pscustomobject]@{ Name = 'Model' }; Dbmod = 0; PickfirstVar = 1; FailSelect = $false; CmdActive = 0; UndoCtl = 5; FailEndUndo = $false
     ExtMin = @(0.0, 0.0, 0.0); ExtMax = @(1000.0, 500.0, 0.0); SetNames = (New-Object System.Collections.ArrayList); SelectFilter = $null
+    ViewCtr = @(5.0, 5.0, 0.0); ViewSize = 20.0; Views = (New-Object System.Collections.ArrayList)
   }
   Add-Member -InputObject $doc -MemberType ScriptMethod -Name GetVariable -Value {
     param($Name)
     switch ($Name) {
       'INSUNITS' { 4 } 'LUNITS' { 2 } 'WORLDUCS' { 1 } 'VIEWTWIST' { 0.0 } 'DBMOD' { $this.Dbmod } 'PICKFIRST' { $this.PickfirstVar }
-      'CMDACTIVE' { $this.CmdActive } 'UNDOCTL' { $this.UndoCtl }
+      'CMDACTIVE' { $this.CmdActive } 'UNDOCTL' { $this.UndoCtl } 'VIEWCTR' { , [double[]]$this.ViewCtr } 'VIEWSIZE' { $this.ViewSize }
       'EXTMIN' { , [double[]]$this.ExtMin } 'EXTMAX' { , [double[]]$this.ExtMax }
       'DWGTITLED' { $(if ($this.FullName) { 1 } else { 0 }) }
     }
@@ -203,7 +208,32 @@ function New-FakeAutoCAD([string]$Name = 'Plan.dwg', [switch]$Empty) {
     $doc.Pickfirst = @('1A', '2C', '5F')
   }
 
-  return [pscustomobject]@{ Version = '25.0s (LMS Tech)'; Name = 'AutoCAD'; Documents = @($doc); ActiveDocument = $doc; HWND = 0 }
+  $acad = [pscustomobject]@{ Version = '25.0s (LMS Tech)'; Name = 'AutoCAD'; Documents = @($doc); ActiveDocument = $doc; HWND = 0; ZoomCalls = (New-Object System.Collections.ArrayList) }
+  # Like AutoCAD, every zoom pushes the view it leaves onto the history and marks the view changed (DBMOD 16).
+  Add-Member -InputObject $acad -MemberType ScriptMethod -Name SetView -Value {
+    param([string]$Call, $Center, $Size)
+    $d = $this.ActiveDocument
+    [void]$this.ZoomCalls.Add($Call)
+    if ($Call -ne 'previous') { [void]$d.Views.Add(@($d.ViewCtr, $d.ViewSize)) }
+    $d.ViewCtr = $Center; $d.ViewSize = $Size; $d.Dbmod = $d.Dbmod -bor 16
+  }
+  Add-Member -InputObject $acad -MemberType ScriptMethod -Name ZoomExtents -Value {
+    $d = $this.ActiveDocument
+    $this.SetView('extents', @((($d.ExtMin[0] + $d.ExtMax[0]) / 2), (($d.ExtMin[1] + $d.ExtMax[1]) / 2), 0.0), ($d.ExtMax[1] - $d.ExtMin[1]))
+  }
+  Add-Member -InputObject $acad -MemberType ScriptMethod -Name ZoomWindow -Value {
+    param($LowerLeft, $UpperRight)
+    if (-not ($LowerLeft -is [double[]] -and $LowerLeft.Length -eq 3 -and $UpperRight -is [double[]] -and $UpperRight.Length -eq 3)) { throw 'Invalid argument LowerLeft in ZoomWindow' }
+    $this.SetView('window', @((($LowerLeft[0] + $UpperRight[0]) / 2), (($LowerLeft[1] + $UpperRight[1]) / 2), 0.0), ($UpperRight[1] - $LowerLeft[1]))
+  }
+  Add-Member -InputObject $acad -MemberType ScriptMethod -Name ZoomPrevious -Value {
+    $views = $this.ActiveDocument.Views
+    $last = $views[$views.Count - 1]
+    $views.RemoveAt($views.Count - 1)
+    $this.SetView('previous', $last[0], $last[1])
+  }
+  Add-Member -InputObject $acad -MemberType ScriptMethod -Name Update -Value { }
+  return $acad
 }
 
 # Holds the apply mutex from another thread, as a second bridge process would.
@@ -242,7 +272,9 @@ function Get-FakeState($Acad) {
         deleted      = @($d.Registry.Values | Where-Object Deleted | ForEach-Object Handle | Sort-Object)
         fingerprints = @($d.Registry.Keys | Sort-Object | ForEach-Object { Get-Fingerprint $d.Registry[$_] })
         undo         = $d.Undo.Count
-        dbmod        = $d.Dbmod
+        # Reads may zoom for a capture, which sets only the window and view bits.
+        dbmod        = $d.Dbmod -band -bnot 24
+        view         = "$($d.ViewCtr -join ',') @ $($d.ViewSize)"
         saved        = $d.Saved
         layers       = @($d.Layers.Items | ForEach-Object { "$($_.Name):$($_.Lock)" })
         sets         = @($d.SelectionSets.Items | ForEach-Object Name | Where-Object { $_ -like 'T3CAD*' })
@@ -277,6 +309,11 @@ $documentId = 'acad:Plan.dwg'
 $documents = (Invoke-FakeRead $acad 'documents' @{}).result.documents
 Assert-Equal $documentId $documents[0].documentId 'documents carry an id built from the drawing name'
 Assert-Equal 'mm' $documents[0].displayUnits 'INSUNITS 4 is millimetres'
+$doc.Saved = $false; $doc.Dbmod = 24
+$viewOnly = (Invoke-FakeRead $acad 'documents' @{}).result.documents[0].modified
+$doc.Dbmod = 4
+Assert-Equal @($false, $true) @($viewOnly, (Invoke-FakeRead $acad 'documents' @{}).result.documents[0].modified) 'zooming and panning alone are not unsaved changes'
+$doc.Saved = $true; $doc.Dbmod = 0
 
 $selection = (Invoke-FakeRead $acad 'selection' @{ documentId = $documentId }).result
 Assert-Equal 3 $selection.total 'selection reads the pickfirst set'
@@ -341,6 +378,7 @@ $doc.ExtMin = @(1e20, 1e20, 1e20); $doc.ExtMax = @(-1e20, -1e20, -1e20); $MaxLay
 $emptyInfo = (Invoke-FakeRead $acad 'info' @{ documentId = $documentId }).result
 Assert-Equal @($null, 2, $true) @($emptyInfo.extents, @($emptyInfo.layers).Count, $emptyInfo.layersTruncated) 'info drops invalid extents and caps layers'
 $MaxLayers = 1000
+$doc.ExtMin = @(0.0, 0.0, 0.0); $doc.ExtMax = @(1000.0, 500.0, 0.0)
 
 $realRow = ${function:Get-EntityRow}
 ${function:Get-EntityRow} = { param($Entity, $LayoutMap, $Options = @{}, $Extent = $null) $Entity.Delete(); & $realRow $Entity $LayoutMap $Options $Extent }
@@ -504,7 +542,11 @@ foreach ($polyline in $arc, $long) { Add-Member -InputObject $polyline -MemberTy
 [void](Add-FakeEntity $geoDoc (New-FakeEntity '13' 'AcDbEllipse' '0' 1 @{ Center = [double[]]@(1, 2, 0); MajorAxis = [double[]]@(4, 0, 0); RadiusRatio = 0.5; StartParameter = 0.0; EndParameter = 2 * [Math]::PI }))
 [void](Add-FakeEntity $geoDoc (New-FakeEntity '14' 'AcDb2dPolyline' '0' 1 @{ Coordinates = [double[]]@(0, 0, 7, 3, 4, 7); Closed = $true; Length = 10.0; Elevation = 7.0; Normal = [double[]]@(0, 0, 1) }))
 [void](Add-FakeEntity $geoDoc (New-FakeEntity '15' 'AcDb3dPolyline' '0' 1 @{ Coordinates = [double[]]@(0, 0, 1, 3, 4, 2); Closed = $false; Length = 5.1 }))
-[void](Add-FakeEntity $geoDoc (New-FakeEntity '16' 'AcDbMText' '0' 1 @{ TextString = '{\fArial|b1;\C1;LIVING}\PROOM \U+00B2'; InsertionPoint = @(0.0, 0.0, 0.0); Height = 2.5 }))
+[void](Add-FakeEntity $geoDoc (New-FakeEntity '16' 'AcDbMText' '0' 1 @{ TextString = '{\fArial|b1;\C1;LIVING}\PROOM \U+00B2'; InsertionPoint = @(0.0, 0.0, 0.0); Height = 2.5; StyleName = 'Standard'; Width = 12.5; AttachmentPoint = 5 }))
+[void](Add-FakeEntity $geoDoc (New-FakeEntity '17' 'AcDbText' '0' 1 @{ TextString = 'SIGN'; InsertionPoint = @(4.0, 4.5, 0.0); Height = 0.25; StyleName = 'ROMANS'; ScaleFactor = 0.8; Rotation = [Math]::PI / 2; Alignment = 10; TextAlignmentPoint = @(5.0, 5.0, 0.0) }))
+[void](Add-FakeEntity $geoDoc (New-FakeEntity '18' 'AcDbRotatedDimension' '0' 1 @{ Measurement = 5.9; TextOverride = ''; TextPosition = @(2.95, 1.0, 0.0); Rotation = 0.0 }))
+[void](Add-FakeEntity $geoDoc (New-FakeEntity '19' 'AcDbAlignedDimension' '0' 1 @{ Measurement = 5.0; TextOverride = '<> m'; TextPosition = @('n/a'); ExtLine1Point = @(0.0, 0.0, 0.0); ExtLine2Point = @(3.0, 4.0, 0.0) }))
+[void](Add-FakeEntity $geoDoc (New-FakeEntity '1A' 'AcDbRadialDimensionLarge' '0' 1 @{ Measurement = 100.0; TextOverride = ''; TextPosition = @(50.0, 50.0, 0.0); Center = @(0.0, 0.0, 0.0); ChordPoint = @(60.0, 80.0, 0.0) }))
 $rows = @{}
 foreach ($row in (Invoke-FakeRead $geo 'query' @{ documentId = $documentId }).result.items) { $rows[$row.handle] = $row }
 Assert-Equal @(@(@(0, 0), @(10, 0), @(10, 10)), @(0, 1, 0), 5, @(0, 0, -1)) @($rows['10'].vertices, $rows['10'].bulges, $rows['10'].elevation, $rows['10'].normal) 'polylines report bulges, elevation and a flipped normal'
@@ -514,11 +556,19 @@ Assert-Equal @(@(1, 2, 0), @(4, 0, 0), 0.5, 0, 6.283185) @($rows['13'].center, $
 Assert-Equal @(2, @(@(0, 0), @(3, 4)), 7) @($rows['14'].vertexCount, $rows['14'].vertices, $rows['14'].elevation) 'old 2D polylines read three values per vertex and keep x, y'
 Assert-Equal @(@(0, 0, 1), @(3, 4, 2)) $rows['15'].vertices '3D polylines keep z'
 Assert-Equal ('LIVING ROOM ' + [char]0xB2) $rows['16'].text 'MText rows return plain text'
+Assert-Equal @('Standard', 12.5, 'middle-center') @($rows['16'].style, $rows['16'].width, $rows['16'].attachment) 'MText rows report style, width and attachment'
+Assert-Equal @('ROMANS', 0.8, 90, 'middle-center', @(5, 5, 0)) @($rows['17'].style, $rows['17'].widthFactor, $rows['17'].rotationDeg, $rows['17'].alignment, $rows['17'].alignmentPoint) 'text rows report style, width factor, rotation and alignment'
+Assert-Equal @('DIMENSION', 5.9, @(2.95, 1, 0), 0, $null) @($rows['18'].type, $rows['18'].measurement, $rows['18'].textPosition, $rows['18'].rotationDeg, $rows['18'].textOverride) 'rotated dimensions report text position and rotation'
+Assert-Equal @(@(0, 0, 0), @(3, 4, 0), '<> m', $null, $true) @($rows['19'].extLine1Point, $rows['19'].extLine2Point, $rows['19'].textOverride, $rows['19'].textPosition, $rows['19'].partial) 'aligned dimensions report extension points and keep them when another property fails'
+Assert-Equal @('DIMENSION', @(0, 0, 0), @(60, 80, 0)) @($rows['1A'].type, $rows['1A'].center, $rows['1A'].chordPoint) 'jogged radial dimensions report center and chord point'
 Assert-Equal @('16') @((Invoke-FakeRead $geo 'query' @{ documentId = $documentId; textContains = 'living room' }).result.items | ForEach-Object handle) 'MText search ignores format codes'
 Assert-Equal 'A {b} 1/2 x\y' (Get-PlainText '\A1;A \{b\} \S1#2; x\\y\L\l') 'MText codes and escapes are stripped'
 
 $interop = Get-InteropPath $InteropSource
 Assert-Equal @($true, $false) @(($interop -eq (Get-InteropPath $InteropSource)), ($interop -eq (Get-InteropPath ($InteropSource + ' ')))) 'the interop cache follows the source'
+
+Assert-Equal 'INVALID_REQUEST' (Invoke-FakeRead $acad 'capture' @{ documentId = $documentId; extents = $true; bbox = @{ min = @(0, 0); max = @(1, 1) } }).error.code 'capture takes extents or bbox, not both'
+Assert-Equal 'INVALID_REQUEST' (Invoke-FakeRead $acad 'capture' @{ documentId = $documentId; bbox = @{ min = @(0, 0); max = @(5, 0) } }).error.code 'a flat capture bbox is refused'
 
 $cacheBase = $env:LOCALAPPDATA
 $env:LOCALAPPDATA = Join-Path ([System.IO.Path]::GetTempPath()) ('t3cad-interop-' + [guid]::NewGuid().ToString('N'))
@@ -526,6 +576,17 @@ try {
   try { Initialize-Interop } catch { Write-Host "Skipping capture: the interop types do not compile here ($_)" }
   if ($null -ne ('T3Cad.Window' -as [type])) {
     Assert-Equal 'CAPTURE_FAILED' (Invoke-FakeRead $acad 'capture' @{ documentId = $documentId; maxWidth = 100; maxHeight = 100 }).error.code 'capture without a window fails cleanly'
+    Assert-Equal @() @($acad.ZoomCalls) 'a plain capture leaves the view alone'
+    $doc.Dbmod = 0
+    $zoomed = Invoke-FakeRead $acad 'capture' @{ documentId = $documentId; extents = $true }
+    Assert-Equal @('CAPTURE_FAILED', @('extents', 'previous'), 16) @($zoomed.error.code, @($acad.ZoomCalls), $doc.Dbmod) 'capture zooms to the extents and restores the view even when the capture fails, and view bits never trip the read check'
+    $acad.ZoomCalls.Clear()
+    [void](Invoke-FakeRead $acad 'capture' @{ documentId = $documentId; bbox = @{ min = @(10, 0); max = @(0, 10) } })
+    Assert-Equal @('window', 'previous') @($acad.ZoomCalls) 'capture zooms to a bbox and restores the view'
+    $acad.ZoomCalls.Clear()
+    [void](Invoke-FakeRead $acad 'capture' @{ documentId = $documentId; bbox = @{ min = @(-5, -5); max = @(15, 15) } })
+    Assert-Equal @('window') @($acad.ZoomCalls) 'a zoom that leaves the view where it was never steps back through the designer''s view history'
+    $doc.Dbmod = 0
   }
 } finally {
   Remove-Item -LiteralPath $env:LOCALAPPDATA -Recurse -Force -ErrorAction SilentlyContinue
@@ -543,11 +604,11 @@ try {
   foreach ($bad in 'copy.dwg', '\\server\share\copy.dwg', '\\?\C:\copy.dwg', '\\.\C:\copy.dwg', '\copy.dwg', 'C:copy.dwg', 'C:\t3\a:b.dwg', (Join-Path $folder 'copy.txt')) {
     Assert-Equal 'INVALID_REQUEST' (Invoke-Fake $acad 'save_copy' @{ documentId = $titledId; path = $bad }).error.code "the copy path $bad is refused"
   }
-  $doc.Saved = $false
+  $doc.Saved = $false; $doc.Dbmod = 17
   Assert-Equal 'UNSAVED_CHANGES' (Invoke-Fake $acad 'save_copy' @{ documentId = $titledId; path = (Join-Path $folder 'copy.dwg') }).error.code 'unsaved changes are never silently saved'
-  $doc.Saved = $true
+  $doc.Dbmod = 24
   $copy = (Invoke-Fake $acad 'save_copy' @{ documentId = $titledId; path = (Join-Path $folder 'sub\..\copy.dwg') }).result
-  Assert-Equal @((Join-Path $folder 'copy.dwg'), $titledId, 'DWG') @($copy.path, $copy.documentId, [System.IO.File]::ReadAllText((Join-Path $folder 'copy.dwg')).Trim()) 'a saved drawing is copied to the normalized path'
+  Assert-Equal @((Join-Path $folder 'copy.dwg'), $titledId, 'DWG') @($copy.path, $copy.documentId, [System.IO.File]::ReadAllText((Join-Path $folder 'copy.dwg')).Trim()) 'a drawing changed only by zooming is copied to the normalized path'
   Assert-Equal 'ALREADY_EXISTS' (Invoke-Fake $acad 'save_copy' @{ documentId = $titledId; path = $copy.path }).error.code 'copies never overwrite'
 } finally {
   Remove-Item -LiteralPath $folder -Recurse -Force

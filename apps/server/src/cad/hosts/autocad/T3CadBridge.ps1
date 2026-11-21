@@ -48,6 +48,8 @@ $ShortTypes = @{
   AcDbTable = 'ACAD_TABLE'; AcDbWipeout = 'WIPEOUT'; AcDbSolid = 'SOLID'; AcDb3dSolid = '3DSOLID'
   AcDbRegion = 'REGION'; AcDbFace = '3DFACE'
 }
+$TextAlignments = @('left', 'center', 'right', 'aligned', 'middle', 'fit', 'top-left', 'top-center', 'top-right', 'middle-left', 'middle-center', 'middle-right', 'bottom-left', 'bottom-center', 'bottom-right')
+$MTextAttachments = @($null, 'top-left', 'top-center', 'top-right', 'middle-left', 'middle-center', 'middle-right', 'bottom-left', 'bottom-center', 'bottom-right')
 
 # --- Errors -------------------------------------------------------------
 
@@ -285,6 +287,11 @@ function Get-Rounded($Value, [int]$Digits = 4) {
   return [Math]::Round([double]$Value, $Digits)
 }
 
+function Get-Degrees($Radians) {
+  if ($null -eq $Radians) { return $null }
+  return Get-Rounded ([double]$Radians * 180 / [Math]::PI) 3
+}
+
 function Get-Point($Point) {
   if ($null -eq $Point) { return $null }
   return , @((Get-Rounded $Point[0]), (Get-Rounded $Point[1]), (Get-Rounded $Point[2]))
@@ -306,7 +313,7 @@ function Get-Limit($Params) {
 
 function Get-ShortType([string]$ObjectName) {
   if ($ShortTypes.ContainsKey($ObjectName)) { return $ShortTypes[$ObjectName] }
-  if ($ObjectName -like '*Dimension') { return 'DIMENSION' }
+  if ($ObjectName -like 'AcDb*Dimension*') { return 'DIMENSION' }
   return $ObjectName
 }
 
@@ -362,6 +369,11 @@ function Get-Extent($Entity) {
   return @{ min = $min; max = $max }
 }
 
+# DBMOD 8 (window) and 16 (view) flip on every zoom or pan, which leaves the file on disk current.
+function Test-UnsavedChanges($Doc) {
+  try { return ([int]$Doc.GetVariable('DBMOD') -band -bnot 24) -ne 0 } catch { return -not [bool]$Doc.Saved }
+}
+
 function Get-UnitsName($Doc) {
   try { return $InsUnits[[int]$Doc.GetVariable('INSUNITS')] } catch { return $null }
 }
@@ -389,7 +401,7 @@ function Get-Documents($Acad, $Params) {
         app          = 'autocad'
         name         = [string]$doc.Name
         path         = $(if ([string]::IsNullOrEmpty($full)) { $null } else { $full })
-        modified     = -not [bool]$doc.Saved
+        modified     = Test-UnsavedChanges $doc
         active       = ($id -eq $active)
         readOnly     = [bool]$doc.ReadOnly
         displayUnits = Get-UnitsName $doc
@@ -453,6 +465,14 @@ function Invoke-Read($Acad, $Params, [string]$Command) {
 function Get-BoxRow($Extent) {
   if ($null -eq $Extent) { return $null }
   return , @(@((Get-Rounded $Extent.min[0]), (Get-Rounded $Extent.min[1])), @((Get-Rounded $Extent.max[0]), (Get-Rounded $Extent.max[1])))
+}
+
+# One property per try, so a row keeps what it could read when one property fails.
+function Add-Field($Row, [string]$Field, [scriptblock]$Read) {
+  try {
+    $value = & $Read
+    if ($null -ne $value) { $Row[$Field] = $value }
+  } catch { $Row.partial = $true }
 }
 
 # Polyline and old-style POLYLINE coordinates are in the object's coordinate system.
@@ -531,8 +551,21 @@ function Get-EntityRow($Entity, $LayoutMap, $Options = @{}, $Extent = $null) {
         $row.startAngleDeg = Get-Rounded ([double]$Entity.StartAngle * 180 / [Math]::PI) 3
         $row.endAngleDeg = Get-Rounded ([double]$Entity.EndAngle * 180 / [Math]::PI) 3
       }
-      'AcDbText' { $row.text = Limit-Text $Entity.TextString; $row.position = Get-Point $Entity.InsertionPoint; $row.height = Get-Rounded $Entity.Height }
-      'AcDbMText' { $row.text = Limit-Text (Get-PlainText $Entity.TextString); $row.position = Get-Point $Entity.InsertionPoint; $row.height = Get-Rounded $Entity.Height }
+      'AcDbText' {
+        $row.text = Limit-Text $Entity.TextString; $row.position = Get-Point $Entity.InsertionPoint; $row.height = Get-Rounded $Entity.Height
+        Add-Field $row 'style' { [string]$Entity.StyleName }
+        Add-Field $row 'widthFactor' { Get-Rounded $Entity.ScaleFactor }
+        Add-Field $row 'rotationDeg' { Get-Degrees $Entity.Rotation }
+        Add-Field $row 'alignment' { $TextAlignments[[int]$Entity.Alignment] }
+        # Only left-aligned text is anchored at its insertion point.
+        if ($row.alignment -and $row.alignment -ne 'left') { Add-Field $row 'alignmentPoint' { Get-Point $Entity.TextAlignmentPoint } }
+      }
+      'AcDbMText' {
+        $row.text = Limit-Text (Get-PlainText $Entity.TextString); $row.position = Get-Point $Entity.InsertionPoint; $row.height = Get-Rounded $Entity.Height
+        Add-Field $row 'style' { [string]$Entity.StyleName }
+        Add-Field $row 'width' { Get-Rounded $Entity.Width }
+        Add-Field $row 'attachment' { $MTextAttachments[[int]$Entity.AttachmentPoint] }
+      }
       'AcDbBlockReference' {
         $row.block = $(try { [string]$Entity.EffectiveName } catch { [string]$Entity.Name })
         $row.position = Get-Point $Entity.InsertionPoint
@@ -547,7 +580,36 @@ function Get-EntityRow($Entity, $LayoutMap, $Options = @{}, $Extent = $null) {
           $row.attributes = $attributes.ToArray()
         }
       }
-      '*Dimension' { $row.measurement = Get-Rounded $Entity.Measurement; $override = [string]$Entity.TextOverride; if ($override) { $row.textOverride = Limit-Text $override 200 } }
+      'AcDb*Dimension*' {
+        $row.measurement = Get-Rounded $Entity.Measurement
+        $override = [string]$Entity.TextOverride
+        if ($override) { $row.textOverride = Limit-Text $override 200 }
+        Add-Field $row 'textPosition' { Get-Point $Entity.TextPosition }
+        # AutoCAD's COM interface has no definition points for rotated, radial or diametric dimensions.
+        switch ($objectName) {
+          'AcDbRotatedDimension' { Add-Field $row 'rotationDeg' { Get-Degrees $Entity.Rotation } }
+          { @('AcDbAlignedDimension', 'AcDbArcDimension') -contains $_ } {
+            Add-Field $row 'extLine1Point' { Get-Point $Entity.ExtLine1Point }
+            Add-Field $row 'extLine2Point' { Get-Point $Entity.ExtLine2Point }
+          }
+          'AcDbArcDimension' { Add-Field $row 'center' { Get-Point $Entity.CenterPoint } }
+          'AcDb3PointAngularDimension' {
+            Add-Field $row 'center' { Get-Point $Entity.AngleVertex }
+            Add-Field $row 'extLine1Point' { Get-Point $Entity.ExtLine1EndPoint }
+            Add-Field $row 'extLine2Point' { Get-Point $Entity.ExtLine2EndPoint }
+          }
+          'AcDb2LineAngularDimension' {
+            Add-Field $row 'extLine1Start' { Get-Point $Entity.ExtLine1StartPoint }
+            Add-Field $row 'extLine1End' { Get-Point $Entity.ExtLine1EndPoint }
+            Add-Field $row 'extLine2Start' { Get-Point $Entity.ExtLine2StartPoint }
+            Add-Field $row 'extLine2End' { Get-Point $Entity.ExtLine2EndPoint }
+          }
+          'AcDbRadialDimensionLarge' {
+            Add-Field $row 'center' { Get-Point $Entity.Center }
+            Add-Field $row 'chordPoint' { Get-Point $Entity.ChordPoint }
+          }
+        }
+      }
       'AcDbHatch' { $row.pattern = [string]$Entity.PatternName; $row.area = Get-Rounded $Entity.Area }
     }
   } catch { $row.partial = $true }
@@ -654,13 +716,13 @@ function Remove-StaleSelectionSets($Doc) {
   foreach ($set in $stale) { Remove-SelectionSet $set }
 }
 
-function Get-Region($Within) {
+function Get-Region($Within, [string]$Name = 'within') {
   if ($null -eq $Within) { return $null }
-  $a = Get-Coordinate $Within.min 'within.min'
-  $b = Get-Coordinate $Within.max 'within.max'
+  $a = Get-Coordinate $Within.min "$Name.min"
+  $b = Get-Coordinate $Within.max "$Name.max"
   $mode = 'crossing'
   if ($Within.mode) { $mode = [string]$Within.mode }
-  if (@('crossing', 'window') -notcontains $mode) { Fail 'INVALID_REQUEST' 'within.mode must be crossing or window.' }
+  if (@('crossing', 'window') -notcontains $mode) { Fail 'INVALID_REQUEST' "$Name.mode must be crossing or window." }
   $min = New-Object 'double[]' 3
   $max = New-Object 'double[]' 3
   for ($i = 0; $i -lt 2; $i++) { $min[$i] = [Math]::Min($a[$i], $b[$i]); $max[$i] = [Math]::Max($a[$i], $b[$i]) }
@@ -749,12 +811,50 @@ function Find-Entities($Acad, $Params) {
   }
 }
 
+function Get-CaptureRegion($Params) {
+  if ($Params.extents -eq $true -and $null -ne $Params.bbox) { Fail 'INVALID_REQUEST' 'Pass extents or bbox, not both.' }
+  if ($Params.extents -eq $true) { return @{ extents = $true } }
+  $region = Get-Region $Params.bbox 'bbox'
+  if ($null -ne $region -and ($region.min[0] -eq $region.max[0] -or $region.min[1] -eq $region.max[1])) { Fail 'INVALID_REQUEST' 'bbox needs a width and a height.' }
+  return $region
+}
+
+function Get-ViewState($Doc) {
+  return @{ center = @($Doc.GetVariable('VIEWCTR')); size = [double]$Doc.GetVariable('VIEWSIZE') }
+}
+
+function Test-SameView($A, $B) {
+  $tolerance = 1e-6 * $A.size
+  if ([Math]::Abs($A.size - $B.size) -gt $tolerance) { return $false }
+  for ($i = 0; $i -lt 2; $i++) { if ([Math]::Abs($A.center[$i] - $B.center[$i]) -gt $tolerance) { return $false } }
+  return $true
+}
+
 function Get-Capture($Acad, $Params) {
   $doc = Resolve-Document $Acad ([string]$Params.documentId) -RequireActive
+  $region = Get-CaptureRegion $Params
   [void][T3Cad.Window]::SetProcessDPIAware()
   $handle = [IntPtr][long]$Acad.HWND
   if ([T3Cad.Window]::IsIconic($handle)) { Fail 'CAPTURE_FAILED' 'AutoCAD is minimized. Restore its window and try again.' }
-  $bitmap = [T3Cad.Window]::Capture($handle)
+  $saved = $null
+  $restored = $true
+  try {
+    if ($null -ne $region) {
+      $saved = Get-ViewState $doc
+      if ($region.extents) { $Acad.ZoomExtents() } else { $Acad.ZoomWindow($region.min, $region.max) }
+      try { $Acad.Update() } catch { }
+    }
+    $bitmap = [T3Cad.Window]::Capture($handle)
+  } finally {
+    # ZoomPrevious restores center, height, twist and direction from AutoCAD's own view history. It runs
+    # only when the view really moved, so a zoom that changed nothing never pops the designer's earlier view.
+    if ($null -ne $saved) {
+      try {
+        if (-not (Test-SameView $saved (Get-ViewState $doc))) { $Acad.ZoomPrevious() }
+        $restored = Test-SameView $saved (Get-ViewState $doc)
+      } catch { $restored = $false }
+    }
+  }
   if ($null -eq $bitmap) { Fail 'CAPTURE_FAILED' 'Windows could not capture the AutoCAD window.' }
   try {
     $maxWidth = [Math]::Min(2048, [Math]::Max(64, [int]$Params.maxWidth))
@@ -769,13 +869,15 @@ function Get-Capture($Acad, $Params) {
       $data = [Convert]::ToBase64String($stream.ToArray())
     } finally { $scaled.Dispose(); $stream.Dispose() }
   } finally { $bitmap.Dispose() }
-  return [ordered]@{
+  $result = [ordered]@{
     documentId = Get-DocumentId $doc
     width      = $width
     height     = $height
     pngBase64  = $data
     scene      = $(try { [string]$doc.ActiveLayout.Name } catch { $null })
   }
+  if (-not $restored) { $result.viewRestored = $false }
+  return $result
 }
 
 # --- Edits --------------------------------------------------------------
@@ -1116,7 +1218,7 @@ function Save-Copy($Acad, $Params) {
     Fail 'UNTITLED_DOCUMENT' 'This drawing has never been saved. Save it once in AutoCAD, then ask for the copy again.'
   }
   # Saving to another name would switch the designer's tab to the copy, so only the file on disk is copied.
-  if (-not [bool]$doc.Saved) {
+  if (Test-UnsavedChanges $doc) {
     Fail 'UNSAVED_CHANGES' 'The applied edits are in the open drawing but not in its file yet. Ask the designer to save it (Ctrl+S) when happy, then save the copy.'
   }
   try { [System.IO.File]::Copy($source, $path, $false) } catch {
