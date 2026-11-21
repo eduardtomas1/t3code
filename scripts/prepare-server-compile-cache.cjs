@@ -15,6 +15,12 @@ module.exports = async ({ appOutDir, electronPlatformName, arch, packager }) => 
     console.log("[server-compile-cache] Skipping untrusted bundle");
     return;
   }
+  // A Windows build made on Windows would otherwise ship the cache, which the
+  // Linux-built release installers never carry and the payload limit leaves out.
+  if (process.env.T3CODE_DESKTOP_SKIP_SERVER_COMPILE_CACHE === "true") {
+    console.log("[server-compile-cache] Skipping disabled server compile cache");
+    return;
+  }
   const targetArch = ["ia32", "x64", "armv7l", "arm64", "universal"][arch];
   const runsWithRosetta =
     electronPlatformName === "darwin" &&

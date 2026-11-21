@@ -5,7 +5,9 @@ name: Fork release (Windows)
 # Builds natively on Windows, so unlike release.yml it needs no Linux job and
 # ships without the embedded WSL runtime.
 #
-#   gh workflow run fork-release-windows.yml --ref <branch> -f version=1.2.3
+#   gh workflow run fork-release-windows.yml --ref main -f version=1.2.3
+#
+# With -f publish=false it only builds and uploads the workflow artifact.
 
 on:
   workflow_dispatch:
@@ -14,6 +16,11 @@ on:
         description: "Release version, plain X.Y.Z (published as tag vX.Y.Z)"
         required: true
         type: string
+      publish:
+        description: "Publish the GitHub Release (off builds and uploads the artifact only)"
+        required: false
+        default: true
+        type: boolean
 
 permissions:
   contents: read
@@ -85,6 +92,10 @@ jobs:
         shell: bash
         env:
           T3CODE_DESKTOP_REUSE_RESOURCE_MONITOR: "true"
+          # Building on Windows would add the server compile cache, which the
+          # Linux-built upstream installers never ship and which overflows the
+          # Windows payload file limit.
+          T3CODE_DESKTOP_SKIP_SERVER_COMPILE_CACHE: "true"
           T3CODE_DESKTOP_UPDATE_REPOSITORY: ${{ github.repository }}
           T3CODE_TELEMETRY_CHANNEL: dev
         run: node scripts/build-desktop-artifact.ts --platform win --target nsis --arch x64 --build-version "$VERSION" --verbose --keep-stage
@@ -139,6 +150,7 @@ jobs:
           compression-level: 0
 
       - name: Publish GitHub Release
+        if: inputs.publish
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
