@@ -66,6 +66,9 @@ function parseJson(text: string): unknown {
   }
 }
 
+// Highlighting tokenizes synchronously in render; a large tool result (a CAD query page, a thread read) stays plain.
+export const MAX_HIGHLIGHTED_TOOL_TEXT_LENGTH = 20_000;
+
 export function isJsonToolText(text: string): boolean {
   if (parseJson(text) !== undefined) return true;
   const documents = text.trim().split(/\n\s*\n/);
