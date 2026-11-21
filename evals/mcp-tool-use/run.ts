@@ -55,6 +55,7 @@ import { PULL_REQUEST_LINKING_INSTRUCTIONS } from "@t3tools/provider-core/server
 import { makeSideChatContext } from "../../apps/server/src/orchestration-v2/ContextHandoffService.ts";
 import { withInlineContext } from "../../apps/server/src/orchestration-v2/ContextHandoffDelivery.ts";
 import { AttachmentToolkit } from "../../apps/server/src/mcp/toolkits/attachment/tools.ts";
+import { CadToolkit } from "../../apps/server/src/mcp/toolkits/cad/tools.ts";
 import { DeviceToolkit } from "../../apps/server/src/mcp/toolkits/device/tools.ts";
 import { EnvironmentToolkit } from "../../apps/server/src/mcp/toolkits/environment/tools.ts";
 import { HtmlToolkit } from "../../apps/server/src/mcp/toolkits/html/tools.ts";
@@ -497,6 +498,7 @@ const t3SourceTools: ReadonlyArray<Tool.Any> = [
   PreviewToolkit,
   IssuesToolkit,
   DeviceToolkit,
+  CadToolkit,
   HtmlToolkit,
   MessageToolkit,
 ].flatMap((toolkit): ReadonlyArray<Tool.Any> => Object.values(toolkit.tools));
