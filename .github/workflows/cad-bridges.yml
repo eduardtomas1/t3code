@@ -7,6 +7,7 @@ on:
   pull_request:
     paths:
       - apps/server/src/cad/hosts/**
+      - apps/server/src/cad/guides/**
       - apps/server/src/cad/hostSources.generated.ts
       - apps/server/scripts/sync-cad-host-sources.ts
       - .github/workflows/cad-bridges.yml
@@ -14,6 +15,7 @@ on:
     branches: [main]
     paths:
       - apps/server/src/cad/hosts/**
+      - apps/server/src/cad/guides/**
       - apps/server/src/cad/hostSources.generated.ts
       - apps/server/scripts/sync-cad-host-sources.ts
       - .github/workflows/cad-bridges.yml

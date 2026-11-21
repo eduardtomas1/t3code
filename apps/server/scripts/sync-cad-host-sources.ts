@@ -1,8 +1,8 @@
 // @effect-diagnostics nodeBuiltinImport:off - standalone code generation uses synchronous Node I/O.
 // @effect-diagnostics globalConsole:off - standalone maintenance command output.
-// Embeds the SketchUp extension and AutoCAD bridge in the server bundle, which
-// must install or run them on machines that have no checkout. Edit the .rb and
-// .ps1 files, then run `vp run --filter t3 cad:sync`.
+// Embeds the SketchUp extension, the AutoCAD bridge and the cad_guide markdown in
+// the server bundle, which must install, run or serve them on machines that have
+// no checkout. Edit the .rb, .ps1 and .md files, then run `vp run --filter t3 cad:sync`.
 import * as NodeFS from "node:fs";
 
 import { format } from "vite-plus/fmt";
@@ -11,6 +11,9 @@ const sources = [
   ["SKETCHUP_LOADER_RB", "../src/cad/hosts/sketchup/t3_cad_bridge.rb"],
   ["SKETCHUP_MAIN_RB", "../src/cad/hosts/sketchup/t3_cad_bridge/main.rb"],
   ["AUTOCAD_BRIDGE_PS1", "../src/cad/hosts/autocad/T3CadBridge.ps1"],
+  ["CAD_GUIDE_AUTOCAD", "../src/cad/guides/autocad.md"],
+  ["CAD_GUIDE_SKETCHUP", "../src/cad/guides/sketchup.md"],
+  ["CAD_GUIDE_PRESENTATION", "../src/cad/guides/presentation.md"],
 ] as const;
 
 const target = new URL("../src/cad/hostSources.generated.ts", import.meta.url);

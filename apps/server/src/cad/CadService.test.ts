@@ -323,6 +323,15 @@ it.layer(NodeServices.layer)("CadService", (it) => {
     }),
   );
 
+  it.effect("serves every guide topic's embedded markdown", () =>
+    Effect.gen(function* () {
+      const cad = yield* makeCad([]);
+      for (const topic of CadService.CadGuideTopic.literals) {
+        expect(cad.guide(topic)).toEqual({ topic, guide: expect.stringMatching(/^# \S/u) });
+      }
+    }),
+  );
+
   it.effect("applies a proposal once, replaying the receipt for repeats and concurrent calls", () =>
     Effect.gen(function* () {
       const release = yield* Deferred.make<void>();
@@ -439,12 +448,13 @@ it.layer(NodeServices.layer)("CadService", (it) => {
     }),
   );
 
-  it.effect("passes capture view control to AutoCAD and refuses it for SketchUp", () =>
+  it.effect("keeps capture view control and style reads AutoCAD-only", () =>
     Effect.gen(function* () {
       const capturing: Answer = (params) =>
         Effect.succeed({ documentId: params.documentId, width: 1, height: 1, pngBase64: "" });
-      const autocad = fakeHost("autocad", { capture: capturing });
-      const sketchup = fakeHost("sketchup", { capture: capturing });
+      const echo: Answer = (params) => Effect.succeed(params);
+      const autocad = fakeHost("autocad", { capture: capturing, info: echo });
+      const sketchup = fakeHost("sketchup", { capture: capturing, info: echo });
       const cad = yield* makeCad([autocad.host, sketchup.host]);
       const bbox = { min: [0, 0], max: [10, 10] };
 
@@ -456,6 +466,12 @@ it.layer(NodeServices.layer)("CadService", (it) => {
       );
       expect(refused.code).toBe("INVALID_REQUEST");
       expect(sketchup.count("capture")).toBe(0);
+
+      yield* cad.info({ documentId: DOC, style: true });
+      expect(autocad.calls.at(-1)?.params).toMatchObject({ style: true });
+      const styleRefused = yield* Effect.flip(cad.info({ documentId: "skp:1", style: true }));
+      expect(styleRefused.code).toBe("INVALID_REQUEST");
+      expect(sketchup.count("info")).toBe(0);
     }),
   );
 

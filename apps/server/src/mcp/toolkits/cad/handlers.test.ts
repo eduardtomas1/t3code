@@ -1,6 +1,7 @@
 import { expect, it } from "@effect/vitest";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { EnvironmentId, ProviderInstanceId, ThreadId } from "@t3tools/contracts";
+import * as Cause from "effect/Cause";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import * as Stream from "effect/Stream";
@@ -13,7 +14,7 @@ import * as McpInvocationContext from "../../McpInvocationContext.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { liveThreadShell } from "../../McpToolAccess.testkit.ts";
 import * as CadHandlers from "./handlers.ts";
-import { CadStandardToolkit } from "./tools.ts";
+import { CadExportToolkit, CadStandardToolkit } from "./tools.ts";
 
 const threadId = ThreadId.make("thread:cad");
 const documentId = "acad:C:/Work/Plan.dwg";
@@ -101,7 +102,10 @@ const run = (
   runtimeMode: "full-access" | "approval-required" = "full-access",
 ) =>
   Effect.provide(
-    McpToolAccess.HandlersLayer.layer(CadHandlers.layerStandard).pipe(
+    Layer.mergeAll(
+      McpToolAccess.HandlersLayer.layer(CadHandlers.layerStandard),
+      McpToolAccess.HandlersLayer.layer(CadHandlers.layerExport),
+    ).pipe(
       Layer.provideMerge(
         Layer.mergeAll(
           scope(client),
@@ -127,6 +131,19 @@ const call = <Name extends keyof typeof CadStandardToolkit.tools>(name: Name, pa
     if (last === undefined) return yield* Effect.die(`${name} produced no result`);
     return last;
   });
+
+const callExport = (params: unknown) =>
+  Effect.gen(function* () {
+    const toolkit = yield* CadExportToolkit;
+    const parts = yield* toolkit
+      .handle("cad_export", params as never)
+      .pipe(Stream.unwrap, Stream.runCollect);
+    const last = parts.at(-1);
+    if (last === undefined) return yield* Effect.die("cad_export produced no result");
+    return last;
+  }).pipe(
+    Effect.catchCause((cause) => Effect.succeed({ isFailure: true, result: Cause.squash(cause) })),
+  );
 
 it.effect("previews, applies once, and reports host failures as tool errors", () =>
   Effect.gen(function* () {
@@ -168,10 +185,12 @@ it.effect("previews, applies once, and reports host failures as tool errors", ()
   }),
 );
 
-it.effect("read-only clients can preview but never apply", () =>
+it.effect("read-only clients can read the guide and preview but never apply", () =>
   Effect.gen(function* () {
     const applied: Array<unknown> = [];
     yield* Effect.gen(function* () {
+      const guide = yield* call("cad_guide", { topic: "presentation" });
+      expect(guide.result).toMatchObject({ topic: "presentation" });
       const preview = yield* call("cad_preview_changes", {
         documentId,
         operations: [{ op: "acad.set_layer", handles: ["1A"], layer: "A-WALL" }],
@@ -206,6 +225,10 @@ it.effect("fenced linked work may apply approved edits but not write files or in
           result: { code: "capability_denied" },
         });
       }
+      expect(yield* callExport({ source: "C:\\Work\\Plan.dwg", format: "pdf" })).toMatchObject({
+        isFailure: true,
+        result: { code: "capability_denied" },
+      });
     }).pipe(run(applied, linkedClient));
   }),
 );
@@ -227,6 +250,12 @@ it.effect("only full-access threads choose a copy's destination or install the e
           result: { code: "capability_denied" },
         });
       }
+      const exportTo = yield* callExport({
+        source: "C:\\Work\\Plan.dwg",
+        format: "pdf",
+        destination: "C:\\Work\\Elsewhere.pdf",
+      });
+      expect(exportTo).toMatchObject({ isFailure: true, result: { code: "capability_denied" } });
     }).pipe(run(saved, undefined, "approval-required"));
   }),
 );

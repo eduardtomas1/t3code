@@ -443,11 +443,13 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   html_render: tool(["Render", "Rendering", "Rendered", "an HTML page"], "html-render"),
   send_to_user: tool(["Send", "Sending", "Sent", "a message"], "send-to-user"),
   cad_status: tool(["Check", "Checking", "Checked", "CAD apps"], "cad"),
+  cad_guide: tool(["Read", "Reading", "Read", "the CAD guide"], "cad"),
   cad_setup: tool(["Set up", "Setting up", "Set up", "CAD apps"], "cad"),
   cad_get_selection: tool(["Read", "Reading", "Read", "the CAD selection"], "cad"),
   cad_query_objects: tool(["Find", "Finding", "Found", "CAD objects"], "cad"),
   cad_document_info: tool(["Read", "Reading", "Read", "CAD document info"], "cad"),
   cad_capture_view: tool(["Capture", "Capturing", "Captured", "the CAD view"], "cad"),
+  cad_export: tool(["Export", "Exporting", "Exported", "a CAD drawing"], "cad"),
   cad_preview_changes: tool(["Preview", "Previewing", "Previewed", "a CAD change"], "cad"),
   // The designer decides in the CAD app, so a finished call may have changed nothing.
   cad_apply_changes: tool(["Apply", "Applying", "Asked to apply", "a CAD change"], "cad-apply"),
