@@ -698,6 +698,7 @@ function summaryActionPriority(action: ToolGroupAction | T3McpToolSummaryAction)
     case "attachment-prepare":
     case "attachment-discard":
     case "attachment-send":
+    case "cad-apply":
       return 0;
     case "other":
     case "update":

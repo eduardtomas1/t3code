@@ -3,6 +3,7 @@ import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
 import { ProviderInstanceId } from "@t3tools/contracts";
 import { McpProviderSessions } from "@t3tools/provider-core/server/McpProviderSessions";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
 import { McpServer } from "effect/ai";
@@ -123,6 +124,26 @@ const codexAdditionalContext = () =>
 const layerAdvertisedTools = McpHttpServer.layerTools.pipe(
   Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
   Layer.provide(toolHandlerServices),
+  // Windows advertises every tool (the CAD tools are Windows and macOS only), on any test host.
+  Layer.provide(Layer.succeed(HostProcess.Platform, "win32")),
+);
+
+it.effect.each(["linux", "win32", "darwin"] as const)(
+  "advertises the CAD tools only where AutoCAD or SketchUp can run (%s)",
+  (platform) =>
+    Effect.gen(function* () {
+      const mcp = yield* McpServer.McpServer;
+      const cad = mcp.tools.filter(({ tool }) => tool.name.startsWith("cad_"));
+      expect(cad.length > 0).toBe(platform !== "linux");
+    }).pipe(
+      Effect.provide(
+        McpHttpServer.layerTools.pipe(
+          Layer.provideMerge(McpHttpServer.layerInProcessMcpServer),
+          Layer.provide(toolHandlerServices),
+          Layer.provide(Layer.succeed(HostProcess.Platform, platform)),
+        ),
+      ),
+    ),
 );
 
 // Claude Code loads these tools up front instead of behind ToolSearch, outside this budget.

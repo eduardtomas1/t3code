@@ -119,6 +119,15 @@ const DISPLAY_NAMES: ReadonlyMap<string, string> = new Map([
   ["Preview an HTML page", msg("Preview an HTML page")],
   ["Render an HTML page", msg("Render an HTML page")],
   ["Send a message", msg("Send a message")],
+  ["Check CAD apps", msg("Check CAD apps")],
+  ["Set up CAD apps", msg("Set up CAD apps")],
+  ["Read the CAD selection", msg("Read the CAD selection")],
+  ["Find CAD objects", msg("Find CAD objects")],
+  ["Read CAD document info", msg("Read CAD document info")],
+  ["Capture the CAD view", msg("Capture the CAD view")],
+  ["Preview a CAD change", msg("Preview a CAD change")],
+  ["Apply a CAD change", msg("Apply a CAD change")],
+  ["Save a CAD copy", msg("Save a CAD copy")],
 ]);
 
 /** @public */

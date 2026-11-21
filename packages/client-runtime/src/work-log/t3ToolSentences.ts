@@ -873,4 +873,76 @@ const T3_TOOL_SENTENCES: ReadonlyMap<string, T3ToolSentence> = new Map<string, T
       ),
     },
   ],
+  [
+    "Check\nChecking\nChecked\nCAD apps",
+    {
+      detail: msg(
+        "{status, select, inProgress {Checking CAD apps} completed {Checked CAD apps} failed {Failed to check CAD apps} declined {Declined to check CAD apps} stopped {Stopped checking CAD apps} other {Checking CAD apps}}",
+      ),
+    },
+  ],
+  [
+    "Set up\nSetting up\nSet up\nCAD apps",
+    {
+      detail: msg(
+        "{status, select, inProgress {Setting up CAD apps} completed {Set up CAD apps} failed {Failed to set up CAD apps} declined {Declined to set up CAD apps} stopped {Stopped setting up CAD apps} other {Setting up CAD apps}}",
+      ),
+    },
+  ],
+  [
+    "Read\nReading\nRead\nthe CAD selection",
+    {
+      detail: msg(
+        "{status, select, inProgress {Reading the CAD selection} completed {Read the CAD selection} failed {Failed to read the CAD selection} declined {Declined to read the CAD selection} stopped {Stopped reading the CAD selection} other {Reading the CAD selection}}",
+      ),
+    },
+  ],
+  [
+    "Find\nFinding\nFound\nCAD objects",
+    {
+      detail: msg(
+        "{status, select, inProgress {Finding CAD objects} completed {Found CAD objects} failed {Failed to find CAD objects} declined {Declined to find CAD objects} stopped {Stopped finding CAD objects} other {Finding CAD objects}}",
+      ),
+    },
+  ],
+  [
+    "Read\nReading\nRead\nCAD document info",
+    {
+      detail: msg(
+        "{status, select, inProgress {Reading CAD document info} completed {Read CAD document info} failed {Failed to read CAD document info} declined {Declined to read CAD document info} stopped {Stopped reading CAD document info} other {Reading CAD document info}}",
+      ),
+    },
+  ],
+  [
+    "Capture\nCapturing\nCaptured\nthe CAD view",
+    {
+      detail: msg(
+        "{status, select, inProgress {Capturing the CAD view} completed {Captured the CAD view} failed {Failed to capture the CAD view} declined {Declined to capture the CAD view} stopped {Stopped capturing the CAD view} other {Capturing the CAD view}}",
+      ),
+    },
+  ],
+  [
+    "Preview\nPreviewing\nPreviewed\na CAD change",
+    {
+      detail: msg(
+        "{status, select, inProgress {Previewing a CAD change} completed {Previewed a CAD change} failed {Failed to preview a CAD change} declined {Declined to preview a CAD change} stopped {Stopped previewing a CAD change} other {Previewing a CAD change}}",
+      ),
+    },
+  ],
+  [
+    "Apply\nApplying\nAsked to apply\na CAD change",
+    {
+      detail: msg(
+        "{status, select, inProgress {Applying a CAD change} completed {Asked to apply a CAD change} failed {Failed to apply a CAD change} declined {Declined to apply a CAD change} stopped {Stopped applying a CAD change} other {Applying a CAD change}}",
+      ),
+    },
+  ],
+  [
+    "Save\nSaving\nSaved\na CAD copy",
+    {
+      detail: msg(
+        "{status, select, inProgress {Saving a CAD copy} completed {Saved a CAD copy} failed {Failed to save a CAD copy} declined {Declined to save a CAD copy} stopped {Stopped saving a CAD copy} other {Saving a CAD copy}}",
+      ),
+    },
+  ],
 ]);

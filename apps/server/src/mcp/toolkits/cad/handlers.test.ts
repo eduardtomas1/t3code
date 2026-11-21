@@ -71,7 +71,17 @@ const missingSketchUp: CadHost = {
   setup: Effect.fail(new CadError({ code: "NOT_INSTALLED", message: "SketchUp was not found." })),
 };
 
-const scope = (access: "full-access" | "read-only" | undefined) =>
+type Client = McpInvocationContext.McpInvocationScope["client"];
+
+// Paired below full access, so T3 fences what its work may change here.
+const linkedClient: Client = {
+  sessionId: "link:laptop",
+  label: "Laptop",
+  access: "approval-required",
+  linked: true,
+};
+
+const scope = (client: Client) =>
   Layer.succeed(McpInvocationContext.McpInvocationContext, {
     environmentId: EnvironmentId.make("environment:cad"),
     requestNamespace: "provider:cad",
@@ -80,19 +90,23 @@ const scope = (access: "full-access" | "read-only" | undefined) =>
       providerSessionId: "provider:cad",
       providerInstanceId: ProviderInstanceId.make("codex"),
     },
-    client: access === undefined ? undefined : { access },
+    client,
     capabilities: new Set(["orchestration" as const]),
     issuedAt: 0,
   } as McpInvocationContext.McpInvocationScope);
 
-const run = (applied: Array<unknown>, access?: "full-access" | "read-only") =>
+const run = (
+  applied: Array<unknown>,
+  client?: Client,
+  runtimeMode: "full-access" | "approval-required" = "full-access",
+) =>
   Effect.provide(
     McpToolAccess.HandlersLayer.layer(CadHandlers.layerStandard).pipe(
       Layer.provideMerge(
         Layer.mergeAll(
-          scope(access),
+          scope(client),
           Layer.mock(ThreadManagement.ThreadManagementService)({
-            getThreadShell: () => Effect.succeed(liveThreadShell(threadId)),
+            getThreadShell: () => Effect.succeed(liveThreadShell(threadId, { runtimeMode })),
           }),
           CadService.layerWithHosts([fakeAutoCad(applied), missingSketchUp]).pipe(
             Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-cad-tools-" })),
@@ -166,6 +180,53 @@ it.effect("read-only clients can preview but never apply", () =>
       const refused = yield* call("cad_apply_changes", { proposalId });
       expect(refused).toMatchObject({ isFailure: true, result: { code: "capability_denied" } });
       expect(applied).toHaveLength(0);
-    }).pipe(run(applied, "read-only"));
+    }).pipe(run(applied, { access: "read-only" } as Client));
+  }),
+);
+
+it.effect("fenced linked work may apply approved edits but not write files or install", () =>
+  Effect.gen(function* () {
+    const applied: Array<unknown> = [];
+    yield* Effect.gen(function* () {
+      const preview = yield* call("cad_preview_changes", {
+        documentId,
+        operations: [{ op: "acad.set_layer", handles: ["1A"], layer: "A-WALL" }],
+      });
+      const proposalId = (preview.result as { proposalId: string }).proposalId;
+      const apply = yield* call("cad_apply_changes", { proposalId });
+      expect(apply.result).toMatchObject({ status: "applied" });
+
+      for (const [name, params] of [
+        ["cad_save_copy", { documentId }],
+        ["cad_setup", { app: "sketchup" }],
+      ] as const) {
+        const refused = yield* call(name, params);
+        expect(refused, name).toMatchObject({
+          isFailure: true,
+          result: { code: "capability_denied" },
+        });
+      }
+    }).pipe(run(applied, linkedClient));
+  }),
+);
+
+it.effect("only full-access threads choose a copy's destination or install the extension", () =>
+  Effect.gen(function* () {
+    const saved: Array<unknown> = [];
+    yield* Effect.gen(function* () {
+      // Any outcome but a refusal: the default destination is allowed in every mode.
+      const nextToOriginal = yield* call("cad_save_copy", { documentId });
+      expect(nextToOriginal).not.toMatchObject({ result: { code: "capability_denied" } });
+      for (const [name, params] of [
+        ["cad_save_copy", { documentId, destination: "C:\\Work\\Elsewhere.dwg" }],
+        ["cad_setup", { app: "sketchup" }],
+      ] as const) {
+        const refused = yield* call(name, params);
+        expect(refused, name).toMatchObject({
+          isFailure: true,
+          result: { code: "capability_denied" },
+        });
+      }
+    }).pipe(run(saved, undefined, "approval-required"));
   }),
 );

@@ -1207,6 +1207,41 @@ export function summarizeT3ToolCalls(
           );
       break;
     }
+    case "cad": {
+      const count = selected.length;
+      label = done
+        ? resolve(
+            msg(
+              "{count, plural, one {Used CAD tools {count} time} other {Used CAD tools {count} times}}",
+              { count },
+            ),
+          )
+        : resolve(
+            msg(
+              "{count, plural, one {Tried to use CAD tools {count} time} other {Tried to use CAD tools {count} times}}",
+              { count },
+            ),
+          );
+      break;
+    }
+    case "cad-apply": {
+      // The designer approves or declines in the CAD app, so a completed call may have changed nothing.
+      const count = selected.length;
+      label = done
+        ? resolve(
+            msg(
+              "{count, plural, one {Asked to apply {count} CAD change} other {Asked to apply {count} CAD changes}}",
+              { count },
+            ),
+          )
+        : resolve(
+            msg(
+              "{count, plural, one {Tried to apply {count} CAD change} other {Tried to apply {count} CAD changes}}",
+              { count },
+            ),
+          );
+      break;
+    }
     case "capabilities": {
       const count = selected.length;
       label = done

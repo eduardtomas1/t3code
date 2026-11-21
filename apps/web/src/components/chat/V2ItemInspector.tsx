@@ -3,6 +3,7 @@ import type { ToolCallDiffTarget } from "../../diffPanelStore";
 import type { EnvironmentId, OrchestrationV2ProjectedTurnItem } from "@t3tools/contracts";
 import {
   isJsonToolText,
+  MAX_HIGHLIGHTED_TOOL_TEXT_LENGTH,
   toolCallLines,
   turnItemDetailRevision,
   turnItemNeedsDetailFetch,
@@ -77,11 +78,13 @@ function StructuredValue({
   readonly language?: "typescript" | "html" | "json";
 }) {
   const text = typeof value === "string" ? value : JSON.stringify(value, null, 2);
-  const isJson = highlightJson && isJsonToolText(text);
   if (!text) return null;
+  const highlighted =
+    text.length <= MAX_HIGHLIGHTED_TOOL_TEXT_LENGTH &&
+    (language !== undefined || (highlightJson && isJsonToolText(text)));
   return (
     <pre className={cn("max-h-80 overflow-auto text-muted-foreground", monoClassName)}>
-      {language || isJson ? (
+      {highlighted ? (
         <RenderErrorBoundary fallback={text}>
           <Suspense fallback={text}>
             <SyntaxTokens text={text} language={language ?? "json"} />

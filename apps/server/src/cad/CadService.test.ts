@@ -1,5 +1,6 @@
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { expect, it } from "@effect/vitest";
+import * as Context from "effect/Context";
 import * as Deferred from "effect/Deferred";
 import * as Effect from "effect/Effect";
 import * as Fiber from "effect/Fiber";
@@ -7,6 +8,7 @@ import * as FileSystem from "effect/FileSystem";
 import * as Layer from "effect/Layer";
 import * as Path from "effect/Path";
 import * as TestClock from "effect/testing/TestClock";
+import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as ServerConfig from "../config.ts";
 import {
@@ -80,18 +82,26 @@ const failing =
   () =>
     Effect.fail(new CadError({ code, message: `${code} from the host` }));
 
-/** Builds a CadService over `hosts`, keeping receipts under `baseDir` (a fresh temp dir by default). */
-const makeCad = (hosts: ReadonlyArray<CadHost>, baseDir?: string) =>
+/**
+ * Builds a CadService over `hosts` in the test's scope, which outlives the applies it forks,
+ * keeping receipts under `baseDir` (a fresh temp dir by default).
+ */
+const makeCad = (
+  hosts: ReadonlyArray<CadHost>,
+  baseDir?: string,
+  platform: NodeJS.Platform = "win32",
+) =>
   Effect.gen(function* () {
     const dir =
       baseDir ??
       (yield* (yield* FileSystem.FileSystem).makeTempDirectoryScoped({ prefix: "t3-cad-" }));
-    return yield* Effect.provide(
-      Effect.service(CadService.CadService),
+    const context = yield* Layer.build(
       CadService.layerWithHosts(hosts).pipe(
         Layer.provide(ServerConfig.layerTest(process.cwd(), dir)),
+        Layer.provide(Layer.succeed(HostProcess.Platform, platform)),
       ),
     );
+    return Context.get(context, CadService.CadService);
   });
 
 const proposeOn = (cad: CadService.CadService["Service"]) =>
@@ -121,6 +131,196 @@ it.layer(NodeServices.layer)("CadService", (it) => {
         expect(sent?.approvalMessage).toContain("Plan.dwg");
         expect(sent?.approvalMessage).toContain("• Line 1A2: layer 0 → Walls");
       }),
+  );
+
+  it.effect("keeps names from the drawing on one line in the approval dialog", () =>
+    Effect.gen(function* () {
+      const hostile = {
+        ...CHANGE,
+        target: "Line\n\n• Line 9: nothing\u202e\u0007",
+        after: "Walls\r\nApply? Yes",
+      };
+      const fake = fakeHost("autocad", {
+        preview: previewing([hostile]),
+        apply: applying("applied"),
+      });
+      const cad = yield* makeCad([fake.host]);
+      yield* cad.apply({ proposalId: yield* proposeOn(cad) });
+
+      const message = String(
+        fake.calls.find((call) => call.method === "apply")?.params.approvalMessage,
+      );
+      expect(message).toContain("• Line • Line 9: nothing: layer 0 → Walls Apply? Yes\n");
+      expect(message).not.toMatch(/[\u0007\u202e\r]/u);
+    }),
+  );
+
+  it.effect("leads the approval dialog with per-operation counts and destructive lines", () =>
+    Effect.gen(function* () {
+      const change = (op: string, target: string) => ({ ...CHANGE, op, target });
+      const changes = [
+        ...Array.from({ length: 20 }, (_, index) => change("acad.set_layer", `Line ${index}`)),
+        change("acad.move", "Circle 1"),
+        change("acad.erase", "Wall A"),
+        change("acad.erase", "Wall B"),
+      ];
+      const fake = fakeHost("autocad", {
+        preview: previewing(changes),
+        apply: applying("applied"),
+      });
+      const cad = yield* makeCad([fake.host]);
+      yield* cad.apply({ proposalId: yield* proposeOn(cad) });
+
+      const message = String(
+        fake.calls.find((call) => call.method === "apply")?.params.approvalMessage,
+      );
+      expect(message).toContain(":\nErase 2 objects, Move 1 object, Set layer (20)\n");
+      const lines = message.split("\n").filter((line) => line.startsWith("• "));
+      expect(lines.slice(0, 3).map((line) => line.split(":")[0])).toEqual([
+        "• Wall A",
+        "• Wall B",
+        "• Circle 1",
+      ]);
+      expect(message).toContain("…and 5 more change(s).");
+    }),
+  );
+
+  it.effect("answers pending while the designer decides, then the receipt on a later call", () =>
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>();
+      const started = yield* Deferred.make<void>();
+      const fake = fakeHost("autocad", {
+        preview: previewing(),
+        apply: () =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as({ status: "applied" }),
+          ),
+      });
+      const cad = yield* makeCad([fake.host]);
+      const proposalId = yield* proposeOn(cad);
+
+      const first = yield* cad
+        .apply({ proposalId })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(started);
+      yield* TestClock.adjust("45 seconds");
+      expect((yield* Fiber.join(first)).status).toBe("pending");
+
+      const second = yield* cad
+        .apply({ proposalId })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.succeed(release, undefined);
+      expect((yield* Fiber.join(second)).status).toBe("applied");
+      expect(fake.count("apply")).toBe(1);
+    }),
+  );
+
+  it.effect("accepts only plain local paths as an agent-supplied copy destination", () =>
+    Effect.gen(function* () {
+      const cases = [
+        {
+          platform: "win32",
+          destination: "C:/Work/Plan copy.dwg",
+          sent: "C:\\Work\\Plan copy.dwg",
+        },
+        {
+          platform: "win32",
+          destination: "D:\\Work\\..\\Plan copy.dwg",
+          sent: "D:\\Plan copy.dwg",
+        },
+        { platform: "win32", destination: "\\\\server\\share\\Plan copy.dwg" },
+        { platform: "win32", destination: "\\\\?\\C:\\Work\\Plan copy.dwg" },
+        { platform: "win32", destination: "\\\\.\\C:\\Work\\Plan copy.dwg" },
+        { platform: "win32", destination: "\\Work\\Plan copy.dwg" },
+        { platform: "win32", destination: "C:Plan copy.dwg" },
+        { platform: "win32", destination: "C:\\Work\\Plan.dwg:hidden.dwg" },
+        {
+          platform: "darwin",
+          destination: "/Users/designer/Plan copy.dwg",
+          sent: "/Users/designer/Plan copy.dwg",
+        },
+        { platform: "darwin", destination: "Work/Plan copy.dwg" },
+      ] as const;
+      for (const { platform, destination, ...expected } of cases) {
+        const fake = fakeHost("autocad", {
+          save_copy: (params) => Effect.succeed({ path: params.path }),
+        });
+        const cad = yield* makeCad([fake.host], undefined, platform);
+        const saved = yield* cad.saveCopy({ documentId: DOC, destination }).pipe(Effect.result);
+        if ("sent" in expected) {
+          expect(saved._tag, destination).toBe("Success");
+          expect(fake.calls.at(-1)?.params.path).toBe(expected.sent);
+        } else {
+          expect(saved._tag === "Failure" && saved.failure.code, destination).toBe(
+            "INVALID_REQUEST",
+          );
+          expect(fake.count("save_copy")).toBe(0);
+        }
+      }
+    }),
+  );
+
+  it.effect("finishes and records an apply whose caller was interrupted", () =>
+    Effect.gen(function* () {
+      const release = yield* Deferred.make<void>();
+      const started = yield* Deferred.make<void>();
+      const fake = fakeHost("autocad", {
+        preview: previewing(),
+        apply: () =>
+          Deferred.succeed(started, undefined).pipe(
+            Effect.andThen(Deferred.await(release)),
+            Effect.as({ status: "applied" }),
+          ),
+      });
+      const cad = yield* makeCad([fake.host]);
+      const proposalId = yield* proposeOn(cad);
+
+      const caller = yield* cad
+        .apply({ proposalId })
+        .pipe(Effect.forkChild({ startImmediately: true }));
+      yield* Deferred.await(started);
+      // An aborted MCP call, while the designer still has the dialog open.
+      yield* Fiber.interrupt(caller);
+      yield* Deferred.succeed(release, undefined);
+
+      const retry = yield* cad.apply({ proposalId });
+      expect(retry.status).toBe("applied");
+      expect(fake.count("apply")).toBe(1);
+    }),
+  );
+
+  it.effect("keeps a proposal usable when the host refuses it before the dialog", () =>
+    Effect.gen(function* () {
+      for (const code of ["HOST_BUSY", "INACTIVE_DOCUMENT", "HOST_OFFLINE", "TIME_BUDGET"]) {
+        let attempts = 0;
+        const fake = fakeHost("autocad", {
+          preview: previewing(),
+          apply: (params) =>
+            ++attempts === 1 ? failing(code)(params) : applying("applied")(params),
+        });
+        const cad = yield* makeCad([fake.host]);
+        const proposalId = yield* proposeOn(cad);
+
+        const refused = yield* Effect.flip(cad.apply({ proposalId }));
+        expect(refused.code).toBe(code);
+        expect((yield* cad.apply({ proposalId })).status).toBe("applied");
+        expect(fake.count("apply")).toBe(2);
+      }
+    }),
+  );
+
+  it.effect("asks only the requested app for its status", () =>
+    Effect.gen(function* () {
+      const autocad = fakeHost("autocad", {});
+      const sketchup: CadHost = {
+        ...fakeHost("sketchup", {}).host,
+        status: Effect.die("SketchUp was asked for its status"),
+      };
+      const cad = yield* makeCad([autocad.host, sketchup]);
+      const status = yield* cad.status("autocad");
+      expect(status.hosts.map((host) => host.app)).toEqual(["autocad"]);
+    }),
   );
 
   it.effect("applies a proposal once, replaying the receipt for repeats and concurrent calls", () =>
@@ -160,8 +360,12 @@ it.layer(NodeServices.layer)("CadService", (it) => {
     Effect.gen(function* () {
       const cases = [
         { answer: applying("rejected"), status: "rejected" },
+        { answer: () => Effect.succeed({ status: "expired" }), status: "expired" },
+        { answer: failing("APPLY_UNCONFIRMED"), status: "unknown" },
         { answer: failing("HOST_TIMEOUT"), status: "unknown" },
         { answer: failing("HOST_DISCONNECTED"), status: "unknown" },
+        { answer: failing("HOST_UNREADABLE"), status: "unknown" },
+        { answer: () => Effect.succeed({ status: "maybe" }), status: "unknown" },
         { answer: failing("PARTIALLY_APPLIED"), status: "partial" },
         { answer: failing("TARGET_CHANGED"), status: "failed" },
       ] as const;
@@ -235,6 +439,26 @@ it.layer(NodeServices.layer)("CadService", (it) => {
     }),
   );
 
+  it.effect("passes capture view control to AutoCAD and refuses it for SketchUp", () =>
+    Effect.gen(function* () {
+      const capturing: Answer = (params) =>
+        Effect.succeed({ documentId: params.documentId, width: 1, height: 1, pngBase64: "" });
+      const autocad = fakeHost("autocad", { capture: capturing });
+      const sketchup = fakeHost("sketchup", { capture: capturing });
+      const cad = yield* makeCad([autocad.host, sketchup.host]);
+      const bbox = { min: [0, 0], max: [10, 10] };
+
+      yield* cad.capture({ documentId: DOC, maxWidth: 64, maxHeight: 64, bbox });
+      expect(autocad.calls[0]?.params).toMatchObject({ bbox });
+
+      const refused = yield* Effect.flip(
+        cad.capture({ documentId: "skp:1", maxWidth: 64, maxHeight: 64, extents: true }),
+      );
+      expect(refused.code).toBe("INVALID_REQUEST");
+      expect(sketchup.count("capture")).toBe(0);
+    }),
+  );
+
   it.effect("saves a copy next to the drawing by default and validates destinations", () =>
     Effect.gen(function* () {
       const path = yield* Path.Path;
@@ -258,7 +482,7 @@ it.layer(NodeServices.layer)("CadService", (it) => {
       const destination = String(fake.calls.at(-1)?.params.path);
       expect(path.dirname(destination)).toBe(path.dirname(drawing));
       expect(path.basename(destination)).toMatch(
-        /^Plan \(T3 copy \d{4}-\d{2}-\d{2} \d{4}\)\.dwg$/u,
+        /^Plan \(T3 copy \d{4}-\d{2}-\d{2} \d{6}\)\.dwg$/u,
       );
 
       for (const bad of ["copy.dwg", path.resolve("plans", "copy.skp")]) {

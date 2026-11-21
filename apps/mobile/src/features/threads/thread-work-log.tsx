@@ -79,6 +79,7 @@ import {
 } from "../../lib/threadActivity";
 import {
   isJsonToolText,
+  MAX_HIGHLIGHTED_TOOL_TEXT_LENGTH,
   toolCallLines,
   turnItemOutputImages,
   turnItemOutputText,
@@ -818,7 +819,12 @@ function ToolCodeText({
   readonly language: "typescript" | "html" | "json";
   readonly theme: "light" | "dark";
 }) {
-  const lines = useMarkdownCodeHighlight({ code, language, theme, enabled: true });
+  const lines = useMarkdownCodeHighlight({
+    code,
+    language,
+    theme,
+    enabled: code.length <= MAX_HIGHLIGHTED_TOOL_TEXT_LENGTH,
+  });
   return <HighlightedCodeText code={code} lines={lines} />;
 }
 
