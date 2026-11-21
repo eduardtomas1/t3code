@@ -293,6 +293,8 @@ export const plotScript = (plan: PlotPlan) => {
           `(setvar "CTAB" (t3lay ${plan.layout}))`,
         ]
       : [String.raw`(setvar "TILEMODE" 1)`]),
+    // Transparency is off in plots by default, which turns translucent fills solid black.
+    String.raw`(setvar "PLOTTRANSPARENCYOVERRIDE" 2)`,
     "_.-PLOT",
     "_Y",
     "",

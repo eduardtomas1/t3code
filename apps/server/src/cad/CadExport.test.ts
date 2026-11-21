@@ -175,6 +175,7 @@ describe("cad_export scripts", () => {
       plan({ layout: 1, area: "layout", plotStyle: "" }),
       [
         '(setvar "CTAB" (t3lay 1))',
+        '(setvar "PLOTTRANSPARENCYOVERRIDE" 2)',
         "_.-PLOT",
         "_Y",
         "",
@@ -199,6 +200,10 @@ describe("cad_export scripts", () => {
     const start = script.indexOf(expected[0] ?? "");
     expect(start).toBeGreaterThanOrEqual(0);
     expect(script.slice(start, start + expected.length)).toEqual(expected);
+    // Translucent fills plot solid black unless transparency is forced on.
+    expect(script[script.indexOf("_.-PLOT") - 1]).toBe(
+      String.raw`(setvar "PLOTTRANSPARENCYOVERRIDE" 2)`,
+    );
   });
 
   it("dxf, dwg and template scripts write fixed names beside the copy", () => {

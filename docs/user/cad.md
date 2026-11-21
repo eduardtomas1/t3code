@@ -53,6 +53,7 @@ Drawing data, text, and screenshots that the agent reads are sent to the AI prov
 - **SketchUp is running but not answering.** Close any open dialog in SketchUp and try again.
 - **AutoCAD is busy.** Finish or cancel the current command, and close any open dialog in AutoCAD.
 - **AutoCAD is not found.** Make sure full AutoCAD for Windows is open with a drawing.
+- **The agent doesn't see new CAD options after an update.** Agents keep the tool list from when their session started. Start a new thread, or a new session in the same thread, after updating T3 Code.
 - **Windows blocks the installer.** The installer is not code signed, so Windows SmartScreen may warn about it. Choose **More info**, then **Run anyway**.
 - **Install the SketchUp extension by hand.** Download `T3CodeCadBridge.rbz` from the [releases page](https://github.com/eduardtomas1/t3code/releases). In SketchUp, open **Extensions → Extension Manager**, choose **Install Extension**, select the file, and restart SketchUp.
 - **Remove the SketchUp extension.** Quit SketchUp, then delete `t3_cad_bridge.rb` and the `t3_cad_bridge` folder from SketchUp's Plugins folder. On Windows that folder is `%APPDATA%\SketchUp\SketchUp 20XX\SketchUp\Plugins`; on macOS it is `~/Library/Application Support/SketchUp 20XX/SketchUp/Plugins`.
