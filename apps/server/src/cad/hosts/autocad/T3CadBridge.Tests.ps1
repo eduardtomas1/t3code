@@ -220,6 +220,8 @@ function New-FakeAutoCAD([string]$Name = 'Plan.dwg', [switch]$Empty) {
   Add-Member -InputObject $acad -MemberType ScriptMethod -Name ZoomExtents -Value {
     $d = $this.ActiveDocument
     $this.SetView('extents', @((($d.ExtMin[0] + $d.ExtMax[0]) / 2), (($d.ExtMin[1] + $d.ExtMax[1]) / 2), 0.0), ($d.ExtMax[1] - $d.ExtMin[1]))
+    # It also recomputes EXTMIN/EXTMAX, which AutoCAD records as a system-variable change.
+    $d.Dbmod = $d.Dbmod -bor 4
   }
   Add-Member -InputObject $acad -MemberType ScriptMethod -Name ZoomWindow -Value {
     param($LowerLeft, $UpperRight)
@@ -579,7 +581,7 @@ try {
     Assert-Equal @() @($acad.ZoomCalls) 'a plain capture leaves the view alone'
     $doc.Dbmod = 0
     $zoomed = Invoke-FakeRead $acad 'capture' @{ documentId = $documentId; extents = $true }
-    Assert-Equal @('CAPTURE_FAILED', @('extents', 'previous'), 16) @($zoomed.error.code, @($acad.ZoomCalls), $doc.Dbmod) 'capture zooms to the extents and restores the view even when the capture fails, and view bits never trip the read check'
+    Assert-Equal @('CAPTURE_FAILED', @('window', 'previous'), 16) @($zoomed.error.code, @($acad.ZoomCalls), $doc.Dbmod) 'capture zooms to the stored extents without marking system variables changed, restores the view even when the capture fails, and view bits never trip the read check'
     $acad.ZoomCalls.Clear()
     [void](Invoke-FakeRead $acad 'capture' @{ documentId = $documentId; bbox = @{ min = @(10, 0); max = @(0, 10) } })
     Assert-Equal @('window', 'previous') @($acad.ZoomCalls) 'capture zooms to a bbox and restores the view'

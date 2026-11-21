@@ -830,6 +830,23 @@ function Test-SameView($A, $B) {
   return $true
 }
 
+# ZoomExtents recomputes EXTMIN/EXTMAX, which marks the drawing's system variables as changed (DBMOD 4),
+# so zoom to the stored extents with a window and fall back to ZoomExtents only when they are unusable.
+function Get-ExtentsWindow($Doc) {
+  try {
+    $min = @($Doc.GetVariable('EXTMIN'))
+    $max = @($Doc.GetVariable('EXTMAX'))
+    $width = [double]$max[0] - [double]$min[0]
+    $height = [double]$max[1] - [double]$min[1]
+    if (-not ($width -gt 0 -and $height -gt 0)) { return $null }
+    $margin = 0.02 * [Math]::Max($width, $height)
+    return @{
+      min = [double[]]@(([double]$min[0] - $margin), ([double]$min[1] - $margin), 0.0)
+      max = [double[]]@(([double]$max[0] + $margin), ([double]$max[1] + $margin), 0.0)
+    }
+  } catch { return $null }
+}
+
 function Get-Capture($Acad, $Params) {
   $doc = Resolve-Document $Acad ([string]$Params.documentId) -RequireActive
   $region = Get-CaptureRegion $Params
@@ -841,7 +858,10 @@ function Get-Capture($Acad, $Params) {
   try {
     if ($null -ne $region) {
       $saved = Get-ViewState $doc
-      if ($region.extents) { $Acad.ZoomExtents() } else { $Acad.ZoomWindow($region.min, $region.max) }
+      if ($region.extents) {
+        $window = Get-ExtentsWindow $doc
+        if ($null -eq $window) { $Acad.ZoomExtents() } else { $Acad.ZoomWindow($window.min, $window.max) }
+      } else { $Acad.ZoomWindow($region.min, $region.max) }
       try { $Acad.Update() } catch { }
     }
     $bitmap = [T3Cad.Window]::Capture($handle)
