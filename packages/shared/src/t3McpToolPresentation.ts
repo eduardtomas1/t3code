@@ -451,8 +451,7 @@ const T3_MCP_TOOLS: Readonly<Record<string, T3McpToolDefinition>> = {
   cad_capture_view: tool(["Capture", "Capturing", "Captured", "the CAD view"], "cad"),
   cad_export: tool(["Export", "Exporting", "Exported", "a CAD drawing"], "cad"),
   cad_preview_changes: tool(["Preview", "Previewing", "Previewed", "a CAD change"], "cad"),
-  // The designer decides in the CAD app, so a finished call may have changed nothing.
-  cad_apply_changes: tool(["Apply", "Applying", "Asked to apply", "a CAD change"], "cad-apply"),
+  cad_apply_changes: tool(["Apply", "Applying", "Applied", "a CAD change"], "cad-apply"),
   cad_save_copy: tool(["Save", "Saving", "Saved", "a CAD copy"], "cad"),
 };
 

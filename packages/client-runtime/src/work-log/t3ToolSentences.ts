@@ -946,10 +946,10 @@ const T3_TOOL_SENTENCES: ReadonlyMap<string, T3ToolSentence> = new Map<string, T
     },
   ],
   [
-    "Apply\nApplying\nAsked to apply\na CAD change",
+    "Apply\nApplying\nApplied\na CAD change",
     {
       detail: msg(
-        "{status, select, inProgress {Applying a CAD change} completed {Asked to apply a CAD change} failed {Failed to apply a CAD change} declined {Declined to apply a CAD change} stopped {Stopped applying a CAD change} other {Applying a CAD change}}",
+        "{status, select, inProgress {Applying a CAD change} completed {Applied a CAD change} failed {Failed to apply a CAD change} declined {Declined to apply a CAD change} stopped {Stopped applying a CAD change} other {Applying a CAD change}}",
       ),
     },
   ],

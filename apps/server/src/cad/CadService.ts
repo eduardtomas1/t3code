@@ -30,19 +30,14 @@ import { CadError, type CadApp, type CadDocument, type CadHostStatus } from "./C
 const PROPOSAL_TTL_MS = 30 * 60 * 1000;
 const MAX_PROPOSALS = 200;
 // Answers before the 60-second timeout most MCP clients use.
-const READ_TIMEOUT_MS = 45_000;
-// Covers the designer reading the approval dialog.
-const APPLY_TIMEOUT_MS = 15 * 60 * 1000;
-// How long one cad_apply_changes call waits for the designer before answering `pending`.
-const APPLY_WAIT_MS = 45_000;
+const CALL_TIMEOUT_MS = 45_000;
 const SAVE_TIMEOUT_MS = 120_000;
-const MAX_APPROVAL_LINES = 18;
 // Older receipts only answer retries of proposals that expired long ago.
 const MAX_RECEIPT_LINES = 5000;
 
 /**
- * Failures that leave the edit unsent or refused before the approval dialog, so it can be retried.
- * The bridges report anything after the designer's click as PARTIALLY_APPLIED, APPLY_FAILED, or
+ * Failures that leave the edit unsent or refused before any step ran, so it can be retried.
+ * The bridges report anything from the first step on as PARTIALLY_APPLIED, APPLY_FAILED, or
  * APPLY_UNCONFIRMED instead, so these codes never stand for a consumed proposal.
  */
 const NOT_SENT_CODES = new Set([
@@ -86,14 +81,13 @@ export type CadChange = typeof CadChange.Type;
 
 const HostPreview = Schema.Struct({
   documentId: Schema.String,
-  documentName: Schema.optional(Schema.String),
   changes: Schema.Array(CadChange),
   fingerprints: Schema.Record(Schema.String, Schema.String),
   warnings: Schema.Array(Schema.String),
 });
 
 const HostApply = Schema.Struct({
-  status: Schema.Literals(["applied", "rejected", "expired"]),
+  status: Schema.Literal("applied"),
   changes: Schema.optional(Schema.Array(CadChange)),
   created: Schema.optional(Schema.Array(Schema.Record(Schema.String, Schema.Unknown))),
 });
@@ -123,7 +117,7 @@ type CaptureInput = {
 export const CadReceipt = Schema.Struct({
   proposalId: Schema.String,
   documentId: Schema.String,
-  status: Schema.Literals(["applied", "rejected", "expired", "failed", "unknown", "partial"]),
+  status: Schema.Literals(["applied", "failed", "unknown", "partial"]),
   message: Schema.String,
   changes: Schema.Array(CadChange),
   created: Schema.Array(Schema.Record(Schema.String, Schema.Unknown)),
@@ -131,10 +125,8 @@ export const CadReceipt = Schema.Struct({
 });
 export type CadReceipt = typeof CadReceipt.Type;
 
-/** A receipt, or `pending` while the designer has not answered yet; never persisted. */
 export const CadApplyResult = Schema.Struct({
   ...CadReceipt.fields,
-  status: Schema.Literals([...CadReceipt.fields.status.literals, "pending"]),
   replayed: Schema.optional(Schema.Literal(true)),
 });
 export type CadApplyResult = typeof CadApplyResult.Type;
@@ -153,7 +145,7 @@ interface Proposal {
   readonly operations: ReadonlyArray<CadOperation>;
   readonly fingerprints: Readonly<Record<string, string>>;
   readonly changes: ReadonlyArray<CadChange>;
-  readonly approvalMessage: string;
+  /** SketchUp's undo menu names the operation after it. */
   readonly title: string;
   readonly expiresAt: number;
 }
@@ -228,61 +220,10 @@ const decodeWith =
       ),
     );
 
-// Names come from the drawing; line breaks and control or bidi characters could hide real lines.
-const singleLine = (text: string) =>
-  text
-    .replace(/[\p{Cc}\p{Cf}\u2028\u2029]+/gu, " ")
-    .replace(/\s{2,}/gu, " ")
-    .trim();
-
-const show = (value: unknown) => {
-  if (value === undefined || value === null || value === "") return "none";
-  const text = singleLine(typeof value === "string" ? value : JSON.stringify(value));
-  return text.length > 60 ? `${text.slice(0, 57)}...` : text;
-};
-
-const opName = (op: string) => op.replace(/^[a-z]+\./u, "");
-// Destructive operations first, so the line cap can never hide one.
-const opRank = (op: string) => (opName(op) === "erase" ? 0 : opName(op) === "move" ? 1 : 2);
-
-/** "Erase 500 objects", "Move 1 object", "Set layer (2)". */
-const opCount = (op: string, count: number) => {
-  const name = opName(op);
-  if (name === "erase" || name === "move") {
-    return `${name === "erase" ? "Erase" : "Move"} ${count} ${count === 1 ? "object" : "objects"}`;
-  }
-  const words = name.replaceAll("_", " ");
-  return `${words.charAt(0).toUpperCase()}${words.slice(1)} (${count})`;
-};
-
-/** The exact text the designer approves in the CAD app's dialog. */
-const approvalMessage = (documentName: string, unordered: ReadonlyArray<CadChange>) => {
-  const changes = unordered.toSorted((a, b) => opRank(a.op) - opRank(b.op));
-  const counts = new Map<string, number>();
-  for (const change of changes) counts.set(change.op, (counts.get(change.op) ?? 0) + 1);
-  const summary = [...counts].map(([op, count]) => opCount(op, count)).join(", ");
-  const lines = changes.slice(0, MAX_APPROVAL_LINES).map((change) => {
-    const target = singleLine(change.target);
-    const line =
-      change.before === undefined || change.before === null
-        ? `• ${target}: ${show(change.after)}`
-        : `• ${target}: ${singleLine(change.field)} ${show(change.before)} → ${show(change.after)}`;
-    return line.length > 160 ? `${line.slice(0, 157)}...` : line;
-  });
-  const more =
-    changes.length > MAX_APPROVAL_LINES
-      ? `\n…and ${changes.length - MAX_APPROVAL_LINES} more change(s).`
-      : "";
-  return `An agent in T3 Code wants to change ${show(documentName)}:\n${singleLine(summary)}\n\n${lines.join("\n")}${more}\n\nApply these changes? You can undo them in one step.`;
-};
-
 const operationTitle = (operations: ReadonlyArray<CadOperation>) => {
   const kinds = [...new Set(operations.map((operation) => operation.op.replace(/^[a-z]+\./u, "")))];
   return kinds.slice(0, 3).join(", ").replaceAll("_", " ");
 };
-
-const documentLabel = (documentId: string, name: string | undefined) =>
-  name ?? NodePath.basename(documentId.replace(/^acad:/u, "")) ?? documentId;
 
 /** `Plan (T3 copy 2026-11-21 163005).dwg`, in the designer's local time. */
 const copyName = (path: string, epochMillis: number) => {
@@ -337,7 +278,7 @@ const make = Effect.gen(function* () {
     string,
     { readonly proposal: Proposal; readonly done: Deferred.Deferred<CadReceipt, CadError> }
   >();
-  // CAD writes are rare and wait on a person; one at a time keeps dialogs from stacking.
+  // CAD writes are rare; one at a time keeps them from interleaving in the same app.
   const writes = yield* Semaphore.make(1);
   const scope = yield* Effect.scope;
 
@@ -447,7 +388,7 @@ const make = Effect.gen(function* () {
     hostFor(input.documentId).pipe(
       Effect.flatMap((host) =>
         host
-          .call(method, input, { documentId: input.documentId, timeoutMs: READ_TIMEOUT_MS })
+          .call(method, input, { documentId: input.documentId, timeoutMs: CALL_TIMEOUT_MS })
           .pipe(Effect.flatMap(decodeWith(HostRecord, host.app))),
       ),
     );
@@ -491,7 +432,7 @@ const make = Effect.gen(function* () {
     }
     const result = yield* host.call("capture", input, {
       documentId: input.documentId,
-      timeoutMs: READ_TIMEOUT_MS,
+      timeoutMs: CALL_TIMEOUT_MS,
     });
     return yield* decodeWith(HostCapture, host.app)(result);
   });
@@ -510,7 +451,7 @@ const make = Effect.gen(function* () {
       });
     }
     const result = yield* host
-      .call("preview", input, { documentId: input.documentId, timeoutMs: READ_TIMEOUT_MS })
+      .call("preview", input, { documentId: input.documentId, timeoutMs: CALL_TIMEOUT_MS })
       .pipe(Effect.flatMap(decodeWith(HostPreview, host.app)));
     if (result.changes.length === 0) {
       return {
@@ -531,10 +472,6 @@ const make = Effect.gen(function* () {
       operations: input.operations,
       fingerprints: result.fingerprints,
       changes: result.changes,
-      approvalMessage: approvalMessage(
-        documentLabel(input.documentId, result.documentName),
-        result.changes,
-      ),
       title: operationTitle(input.operations),
       expiresAt: now + PROPOSAL_TTL_MS,
     };
@@ -576,10 +513,9 @@ const make = Effect.gen(function* () {
           documentId: proposal.documentId,
           operations: proposal.operations,
           expectedFingerprints: proposal.fingerprints,
-          approvalMessage: proposal.approvalMessage,
           title: proposal.title,
         },
-        { documentId: proposal.documentId, timeoutMs: APPLY_TIMEOUT_MS },
+        { documentId: proposal.documentId, timeoutMs: CALL_TIMEOUT_MS },
       )
       .pipe(Effect.result);
     if (outcome._tag === "Failure") {
@@ -593,29 +529,13 @@ const make = Effect.gen(function* () {
     }
     const answer = yield* decodeWith(HostApply, host.app)(outcome.success).pipe(Effect.option);
     if (Option.isNone(answer)) return unknownReceipt(proposal, at);
-    switch (answer.value.status) {
-      case "applied":
-        return {
-          ...base,
-          status: "applied" as const,
-          message: `Applied in ${CadHosts.appLabel(host.app)} as one undo step. It is not saved yet; use cad_save_copy for a separate file.`,
-          changes: answer.value.changes ?? proposal.changes,
-          created: answer.value.created ?? [],
-        };
-      case "rejected":
-        return {
-          ...base,
-          status: "rejected" as const,
-          message: "The designer declined this change. Nothing was modified.",
-        };
-      case "expired":
-        return {
-          ...base,
-          status: "expired" as const,
-          message:
-            "The designer did not approve this change in time, so nothing was modified. Preview it again if it is still wanted.",
-        };
-    }
+    return {
+      ...base,
+      status: "applied" as const,
+      message: `Applied in ${CadHosts.appLabel(host.app)} as one undo step. It is not saved yet; use cad_save_copy for a separate file.`,
+      changes: answer.value.changes ?? proposal.changes,
+      created: answer.value.created ?? [],
+    };
   });
 
   /** Settles `proposal` into `done`; nothing that happens to the caller cancels it. */
@@ -640,33 +560,11 @@ const make = Effect.gen(function* () {
       ),
     );
 
-  /** The receipt, or `pending` once this call has waited long enough for an MCP client. */
-  const awaitReceipt = (proposal: Proposal, done: Deferred.Deferred<CadReceipt, CadError>) =>
-    Deferred.await(done).pipe(
-      Effect.timeoutOption(APPLY_WAIT_MS),
-      Effect.flatMap(
-        Option.match({
-          onSome: (receipt): Effect.Effect<CadApplyResult> => Effect.succeed(receipt),
-          onNone: () =>
-            Effect.map(DateTime.now, (now) => ({
-              proposalId: proposal.id,
-              documentId: proposal.documentId,
-              changes: proposal.changes,
-              created: [],
-              at: DateTime.formatIso(now),
-              status: "pending" as const,
-              message:
-                "The designer has not answered the approval dialog yet. Call cad_apply_changes again with the same proposalId to keep waiting; it is never applied twice.",
-            })),
-        }),
-      ),
-    );
-
   const apply = Effect.fn("CadService.apply")(function* (input: { readonly proposalId: string }) {
     const previous = yield* storedReceipt(input.proposalId);
     if (previous !== undefined) return { ...previous, replayed: true as const };
     const running = inFlight.get(input.proposalId);
-    if (running !== undefined) return yield* awaitReceipt(running.proposal, running.done);
+    if (running !== undefined) return yield* Deferred.await(running.done);
     const proposal = proposals.get(input.proposalId);
     if (proposal === undefined || proposal.expiresAt <= (yield* Clock.currentTimeMillis)) {
       proposals.delete(input.proposalId);
@@ -677,11 +575,11 @@ const make = Effect.gen(function* () {
     }
     const done = yield* Deferred.make<CadReceipt, CadError>();
     inFlight.set(proposal.id, { proposal, done });
-    // Single use once sent: only a failure before the approval dialog puts it back.
+    // Single use once sent: only a failure before any step puts it back.
     proposals.delete(proposal.id);
-    // An aborted MCP call must not cancel an edit whose dialog the designer can still approve.
+    // An aborted MCP call must not cancel an edit the host may already be running.
     yield* Effect.forkIn(settle(proposal, done), scope);
-    return yield* awaitReceipt(proposal, done);
+    return yield* Deferred.await(done);
   });
 
   const saveCopy = Effect.fn("CadService.saveCopy")(function* (input: {

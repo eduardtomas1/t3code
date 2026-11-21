@@ -12,8 +12,8 @@ module T3Code
       else
         extension = SketchupExtension.new('T3 Code CAD Bridge', 't3_cad_bridge/main')
         extension.description =
-          'Lets agents in T3 Code read the open model and apply only the edits you approve.'
-        extension.version = '1.1.0'
+          'Lets agents in T3 Code read the open model and apply the edits you ask for.'
+        extension.version = '1.2.0'
         extension.creator = 'T3 Code'
         Sketchup.register_extension(extension, true)
       end

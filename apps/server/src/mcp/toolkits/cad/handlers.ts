@@ -49,10 +49,10 @@ const handlers = {
   cad_preview_changes: McpToolAccess.reads((input) =>
     Effect.flatMap(CadService.CadService, (cad) => cad.preview(input)),
   ),
-  // The designer's dialog inside the CAD app is the approval; this only refuses read-only clients.
+  // Changes the designer's open drawing with no in-app approval, which fenced linked work may not.
   cad_apply_changes: McpToolAccess.writes(
     (input) => Effect.flatMap(CadService.CadService, (cad) => cad.apply(input)),
-    { linkedCallers: "allowed" },
+    { linkedCallers: { refused: "change drawings open in CAD apps on this computer" } },
   ),
   // Writes a new file on this computer, which fenced linked work may not.
   cad_save_copy: McpToolAccess.writes(
@@ -86,8 +86,8 @@ const handlers = {
       };
     }),
   ),
-  // Works on copies and never touches the live session, so no approval dialog applies; it still
-  // writes files beside the designer's, which fenced linked work may not.
+  // Works on copies and never touches the live session; it still writes files beside the
+  // designer's, which fenced linked work may not.
   cad_export: McpToolAccess.writes(
     (input) =>
       (input.destination === undefined
