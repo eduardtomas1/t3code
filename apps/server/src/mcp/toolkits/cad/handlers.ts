@@ -20,13 +20,7 @@ const handlers = {
   ),
   // Writes only T3's own extension files into SketchUp's Plugins folder.
   cad_setup: McpToolAccess.writes(
-    ({ app }) =>
-      Effect.gen(function* () {
-        const { results } = yield* (yield* CadService.CadService).setup;
-        return {
-          results: app === undefined ? results : results.filter((result) => result.app === app),
-        };
-      }),
+    ({ app }) => Effect.flatMap(CadService.CadService, (cad) => cad.setup(app)),
     { linkedCallers: "allowed" },
   ),
   cad_get_selection: McpToolAccess.reads((input) =>

@@ -94,10 +94,10 @@ export class CadService extends Context.Service<
       readonly hosts: ReadonlyArray<Omit<CadHostStatus, "documents">>;
       readonly documents: ReadonlyArray<CadDocument>;
     }>;
-    readonly setup: Effect.Effect<
-      { readonly results: ReadonlyArray<CadHosts.CadSetupResult> },
-      CadError
-    >;
+    /** Sets up only `app` when given, so one app's missing install never fails the other. */
+    readonly setup: (
+      app?: CadApp,
+    ) => Effect.Effect<{ readonly results: ReadonlyArray<CadHosts.CadSetupResult> }, CadError>;
     readonly selection: (input: {
       readonly documentId: string;
       readonly limit?: number | undefined;
@@ -265,10 +265,13 @@ const make = Effect.gen(function* () {
     };
   }).pipe(Effect.withSpan("CadService.status"));
 
-  const setup = Effect.forEach(hosts, (host) => host.setup).pipe(
-    Effect.map((results) => ({ results })),
-    Effect.withSpan("CadService.setup"),
-  );
+  const setup = Effect.fn("CadService.setup")(function* (app?: CadApp) {
+    const results = yield* Effect.forEach(
+      hosts.filter((host) => app === undefined || host.app === app),
+      (host) => host.setup,
+    );
+    return { results };
+  });
 
   const read = (
     method: "selection" | "query",

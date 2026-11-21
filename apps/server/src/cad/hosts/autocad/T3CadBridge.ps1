@@ -503,6 +503,8 @@ function New-Plan($Acad, $Doc, $Operations) {
   }
   $layoutMap = Get-LayoutMap $Doc
   $newLayers = @{}
+  # Layers as earlier operations in this batch leave them, so a later one is never skipped as a no-op.
+  $projectedLayers = @{}
   foreach ($op in $operations) {
     $kind = [string]$op.op
     switch ($kind) {
@@ -522,8 +524,11 @@ function New-Plan($Acad, $Doc, $Operations) {
         if ($null -eq (Get-Layer $Doc $name) -and -not $newLayers.ContainsKey($name.ToLowerInvariant())) { Fail 'LAYER_NOT_FOUND' "No layer named `"$name`". Create it first with acad.create_layer." }
         foreach ($handle in (Get-Targets $op)) {
           $entity = Get-WritableEntity $Doc $handle $layoutMap $plan
-          if ([string]$entity.Layer -ieq $name) { [void]$plan.warnings.Add("$(Get-Label $entity) is already on layer $name."); continue }
-          Add-Change $plan $kind (Get-Label $entity) 'layer' ([string]$entity.Layer) $name
+          $current = [string]$entity.Layer
+          if ($projectedLayers.ContainsKey($handle)) { $current = $projectedLayers[$handle] }
+          if ($current -ieq $name) { [void]$plan.warnings.Add("$(Get-Label $entity) is already on layer $name."); continue }
+          $projectedLayers[$handle] = $name
+          Add-Change $plan $kind (Get-Label $entity) 'layer' $current $name
           [void]$plan.steps.Add(@{ kind = $kind; entity = $entity; value = $name })
         }
       }
@@ -617,9 +622,17 @@ function New-Plan($Acad, $Doc, $Operations) {
   return $plan
 }
 
+# Records when a failed step could not remove what it created, so the apply reports it.
+function Undo-Creation($Object) {
+  try { $Object.Delete() } catch { $script:StepLeftChanges = $true }
+}
+
 function Invoke-Step($Doc, $Step, $Created) {
   switch ($Step.kind) {
-    'acad.create_layer' { $layer = $Doc.Layers.Add($Step.name); if ($null -ne $Step.color) { $layer.Color = $Step.color } }
+    'acad.create_layer' {
+      $layer = $Doc.Layers.Add($Step.name)
+      try { if ($null -ne $Step.color) { $layer.Color = $Step.color } } catch { Undo-Creation $layer; throw }
+    }
     'acad.set_layer' { $Step.entity.Layer = (Get-Layer $Doc $Step.value).Name }
     'acad.set_color' { $Step.entity.Color = $Step.value }
     'acad.set_text' { $Step.entity.TextString = $Step.value }
@@ -635,11 +648,16 @@ function Invoke-Step($Doc, $Step, $Created) {
       $space = $Doc.ModelSpace
       switch ($Step.kind) {
         'acad.add_line' { $entity = $space.AddLine($Step.start, $Step.end) }
-        'acad.add_polyline' { $entity = $space.AddLightWeightPolyline($Step.coordinates); if ($Step.closed) { $entity.Closed = $true } }
+        'acad.add_polyline' { $entity = $space.AddLightWeightPolyline($Step.coordinates) }
         'acad.add_circle' { $entity = $space.AddCircle($Step.center, $Step.radius) }
-        'acad.add_text' { $entity = $space.AddText($Step.text, $Step.position, $Step.height); if ($Step.rotation -ne 0) { $entity.Rotation = $Step.rotation } }
+        'acad.add_text' { $entity = $space.AddText($Step.text, $Step.position, $Step.height) }
       }
-      if ($Step.layer) { $entity.Layer = (Get-Layer $Doc $Step.layer).Name }
+      # A step either completes or leaves nothing behind, so a failure in the first step changed nothing.
+      try {
+        if ($Step.kind -eq 'acad.add_polyline' -and $Step.closed) { $entity.Closed = $true }
+        if ($Step.kind -eq 'acad.add_text' -and $Step.rotation -ne 0) { $entity.Rotation = $Step.rotation }
+        if ($Step.layer) { $entity.Layer = (Get-Layer $Doc $Step.layer).Name }
+      } catch { Undo-Creation $entity; throw }
       [void]$Created.Add([ordered]@{ handle = [string]$entity.Handle; type = (Get-ShortType ([string]$entity.ObjectName)) })
     }
   }
@@ -679,13 +697,14 @@ function Invoke-Apply($Acad, $Params) {
   if ($stale.Count -gt 0) { Fail 'TARGET_CHANGED' 'The drawing changed while the approval dialog was open. Preview again.' }
   $created = New-Object System.Collections.ArrayList
   $done = 0
+  $script:StepLeftChanges = $false
   $doc.StartUndoMark()
   try {
     foreach ($step in $plan.steps) { Invoke-Step $doc $step $created; $done++ }
   } catch {
     $shape = Get-ErrorShape $_
     $doc.EndUndoMark()
-    if ($done -eq 0) { Fail 'APPLY_FAILED' "AutoCAD refused the edit, so nothing was changed: $($shape.message)" }
+    if ($done -eq 0 -and -not $script:StepLeftChanges) { Fail 'APPLY_FAILED' "AutoCAD refused the edit, so nothing was changed: $($shape.message)" }
     Fail 'PARTIALLY_APPLIED' "AutoCAD stopped after $done of $($plan.steps.Count) steps: $($shape.message). One Undo in AutoCAD reverts the steps that ran."
   }
   $doc.EndUndoMark()

@@ -194,6 +194,26 @@ $partial = Invoke-Fake $acad 'apply' @{ documentId = $documentId; operations = $
 Assert-Equal 'PARTIALLY_APPLIED' $partial.error.code 'a failure after the first step is reported honestly'
 Assert-Equal @('start', 'end') @($doc.Undo) 'a failed apply still closes its undo group'
 
+$doc.Registry['1A'] = New-FakeEntity '1A' 'AcDbLine' 'A-WALL' 1 @{ StartPoint = @(0.0, 0.0, 0.0); EndPoint = @(1000.0, 0.0, 0.0) }
+$roundTrip = @(@{ op = 'acad.set_layer'; handles = @('1A'); layer = 'A-ANNO' }, @{ op = 'acad.set_layer'; handles = @('1A'); layer = 'A-WALL' })
+$roundTripPreview = (Invoke-Fake $acad 'preview' @{ documentId = $documentId; operations = $roundTrip }).result
+Assert-Equal @('A-WALL', 'A-ANNO') @($roundTripPreview.changes | ForEach-Object before) 'a later layer change sees the earlier one'
+[void](Invoke-Fake $acad 'apply' @{ documentId = $documentId; operations = $roundTrip; expectedFingerprints = $roundTripPreview.fingerprints; approvalMessage = 'Round trip?' })
+Assert-Equal 'A-WALL' $doc.Registry['1A'].Layer 'the last layer change in a batch wins'
+
+$doc.Layers.Factory = {
+  param($Name)
+  $layer = [pscustomobject]@{ Name = $Name; Lock = $false; Collection = $doc.Layers }
+  Add-Member -InputObject $layer -MemberType ScriptProperty -Name Color -Value { 7 } -SecondValue { throw 'eInvalidColor' }
+  Add-Member -InputObject $layer -MemberType ScriptMethod -Name Delete -Value { $this.Collection.Items.Remove($this) }
+  return $layer
+}
+$colorOps = @(@{ op = 'acad.create_layer'; name = 'A-BROKEN'; color = 3 })
+$colorPreview = (Invoke-Fake $acad 'preview' @{ documentId = $documentId; operations = $colorOps }).result
+$failed = Invoke-Fake $acad 'apply' @{ documentId = $documentId; operations = $colorOps; expectedFingerprints = $colorPreview.fingerprints; approvalMessage = 'Layer?' }
+Assert-Equal 'APPLY_FAILED' $failed.error.code 'a step that fails after creating something removes it and reports nothing changed'
+Assert-Equal $null (Get-Layer $doc 'A-BROKEN') 'the half-made layer is gone'
+
 $folder = Join-Path ([System.IO.Path]::GetTempPath()) ('t3cad-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $folder | Out-Null
 try {

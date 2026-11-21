@@ -397,8 +397,25 @@ module T3Code
       parts << (material ? material.name : '')
       parts << (entity.respond_to?(:hidden?) && entity.hidden?)
       bounds = entity.bounds
-      parts << [bounds.min.to_a, bounds.max.to_a].flatten.map { |v| v.to_f.round(6) } unless container?(entity) || bounds.empty?
+      parts << [bounds.min.to_a, bounds.max.to_a].flatten.map { |v| v.to_f.round(6) } unless bounds.empty?
+      parts << contents_digest(entity.definition) if container?(entity)
       Digest::SHA256.hexdigest(parts.join('|'))[0, 16]
+    end
+
+    # A container's direct contents, so an edit inside a group after the preview
+    # makes the preview stale. Capped so huge definitions stay cheap.
+    def self.contents_digest(definition)
+      entities = definition.entities
+      rows = entities.first(2000).map do |child|
+        child_bounds = child.bounds
+        material = child.respond_to?(:material) ? child.material : nil
+        [
+          child.persistent_id, type_name(child),
+          child.respond_to?(:layer) ? child.layer.name : '', material ? material.name : '',
+          child_bounds.empty? ? '' : [child_bounds.min.to_a, child_bounds.max.to_a].flatten.map { |v| v.to_f.round(6) }
+        ].join(',')
+      end
+      "#{entities.size}:#{Digest::SHA256.hexdigest(rows.join(';'))[0, 16]}"
     end
 
     def self.vector_param(value, name)
@@ -435,6 +452,8 @@ module T3Code
       new_tags = {}
       new_materials = {}
       warnings = []
+      # Tags as earlier operations in this batch leave them, so a later one is never skipped as a no-op.
+      projected_tags = {}
       target = lambda do |raw_id|
         entity = entity_for(model, raw_id)
         writable!(entity)
@@ -471,12 +490,15 @@ module T3Code
           fail!('TAG_NOT_FOUND', "No tag named \"#{name}\". Create it first with skp.create_tag.") unless find_tag(model, name) || new_tags[name]
           ids_param(op).each do |raw_id|
             entity = target.call(raw_id)
-            before = tag_label(entity.layer)
-            if before == name
-              warnings << "#{label(entity)} already has tag #{name}."
+            existing = find_tag(model, name)
+            after = existing ? tag_label(existing) : name
+            before = projected_tags.fetch(entity.persistent_id) { tag_label(entity.layer) }
+            if before == after
+              warnings << "#{label(entity)} already has tag #{after}."
               next
             end
-            changes << { 'op' => kind, 'target' => label(entity), 'field' => 'tag', 'before' => before, 'after' => name }
+            projected_tags[entity.persistent_id] = after
+            changes << { 'op' => kind, 'target' => label(entity), 'field' => 'tag', 'before' => before, 'after' => after }
             steps << ->(_created) { entity.layer = find_tag(model, name) }
           end
         when 'skp.set_material'
@@ -517,6 +539,8 @@ module T3Code
             steps << ->(_created) { entity.hidden = hidden }
           end
         when 'skp.erase'
+          # Erasing is the edit that loses the most; any committed change since the preview makes it stale.
+          fingerprints['revision'] = revision(model_id(model)).to_s
           ids_param(op).each do |raw_id|
             entity = target.call(raw_id)
             changes << { 'op' => kind, 'target' => label(entity), 'field' => 'entity', 'before' => 'present', 'after' => 'erased' }

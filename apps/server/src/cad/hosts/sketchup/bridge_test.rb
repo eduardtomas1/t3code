@@ -204,6 +204,10 @@ module Sketchup
       @hidden == true
     end
 
+    def bounds
+      Geom::BoundingBox.new(Geom::Point3d.new(0, 0, 0), Geom::Point3d.new(1, 1, 1))
+    end
+
     def valid?
       @valid
     end
@@ -551,6 +555,40 @@ class BridgeTest < Minitest::Test
     response = call('apply', 'documentId' => @document_id, 'operations' => operations, 'expectedFingerprints' => preview['fingerprints'])
     assert_equal 'APPLY_FAILED', response['error']['code']
     assert_equal [:abort], @model.operations.last
+  end
+
+  def test_an_edit_inside_a_group_makes_its_erase_preview_stale
+    group = @model.entities.add_group
+    operations = [{ 'op' => 'skp.erase', 'ids' => [group.persistent_id.to_s] }]
+    preview = call('preview', 'documentId' => @document_id, 'operations' => operations)['result']
+    group.entities.add_face([0, 0, 0], [1, 0, 0], [1, 1, 0])
+    UI.answers = [IDYES]
+    response = call('apply', 'documentId' => @document_id, 'operations' => operations, 'expectedFingerprints' => preview['fingerprints'])
+    assert_equal 'TARGET_CHANGED', response['error']['code']
+    assert group.valid?
+  end
+
+  def test_any_committed_change_makes_an_erase_preview_stale
+    operations = [{ 'op' => 'skp.erase', 'ids' => [@loose_chair.persistent_id.to_s] }]
+    preview = call('preview', 'documentId' => @document_id, 'operations' => operations)['result']
+    Bridge.bump(@document_id)
+    UI.answers = [IDYES]
+    response = call('apply', 'documentId' => @document_id, 'operations' => operations, 'expectedFingerprints' => preview['fingerprints'])
+    assert_equal 'TARGET_CHANGED', response['error']['code']
+    assert @loose_chair.valid?
+  end
+
+  def test_a_later_retag_in_the_same_batch_is_not_skipped
+    id = @loose_chair.persistent_id.to_s
+    operations = [
+      { 'op' => 'skp.set_tag', 'ids' => [id], 'tag' => 'Walls' },
+      { 'op' => 'skp.set_tag', 'ids' => [id], 'tag' => 'Untagged' }
+    ]
+    preview = call('preview', 'documentId' => @document_id, 'operations' => operations)['result']
+    assert_equal [%w[Untagged Walls], %w[Walls Untagged]], preview['changes'].map { |change| [change['before'], change['after']] }
+    UI.answers = [IDYES]
+    call('apply', 'documentId' => @document_id, 'operations' => operations, 'expectedFingerprints' => preview['fingerprints'])
+    assert_equal 'Layer0', @loose_chair.layer.name
   end
 
   def test_save_copy_never_overwrites

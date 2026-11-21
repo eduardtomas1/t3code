@@ -60,8 +60,16 @@ const fakeAutoCad = (applied: Array<unknown>): CadHost => ({
         return Effect.fail(new CadError({ code: "HOST_BUSY", message: "AutoCAD is busy." }));
     }
   },
-  setup: Effect.die("unused"),
+  setup: Effect.succeed({ app: "autocad", installedFor: [], restartRequired: false, note: "ok" }),
 });
+
+const missingSketchUp: CadHost = {
+  app: "sketchup",
+  owns: (id) => id.startsWith("skp:"),
+  status: Effect.succeed({ app: "sketchup", state: "not_installed", documents: [] }),
+  call: () => Effect.die("unused"),
+  setup: Effect.fail(new CadError({ code: "NOT_INSTALLED", message: "SketchUp was not found." })),
+};
 
 const scope = (access: "full-access" | "read-only" | undefined) =>
   Layer.succeed(McpInvocationContext.McpInvocationContext, {
@@ -86,7 +94,7 @@ const run = (applied: Array<unknown>, access?: "full-access" | "read-only") =>
           Layer.mock(ThreadManagement.ThreadManagementService)({
             getThreadShell: () => Effect.succeed(liveThreadShell(threadId)),
           }),
-          CadService.layerWithHosts([fakeAutoCad(applied)]).pipe(
+          CadService.layerWithHosts([fakeAutoCad(applied), missingSketchUp]).pipe(
             Layer.provide(ServerConfig.layerTest(process.cwd(), { prefix: "t3-cad-tools-" })),
           ),
         ),
@@ -127,6 +135,9 @@ it.effect("previews, applies once, and reports host failures as tool errors", ()
         expectedFingerprints: { "entity:1A": "abc" },
         approvalMessage: expect.stringContaining("LINE 1A: layer 0 → A-WALL"),
       });
+
+      const setup = yield* call("cad_setup", { app: "autocad" });
+      expect(setup).toMatchObject({ isFailure: false, result: { results: [{ app: "autocad" }] } });
 
       const busy = yield* call("cad_get_selection", { documentId });
       expect(busy).toMatchObject({ isFailure: true, result: { code: "HOST_BUSY" } });
