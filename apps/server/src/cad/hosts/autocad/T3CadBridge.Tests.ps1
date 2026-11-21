@@ -27,6 +27,7 @@ class FakeCollection : System.Collections.IEnumerable {
 # Enumerable like the real AcadSelectionSet, so PowerShell unrolls it the same way when it is returned.
 class FakeSelectionSet : System.Collections.IEnumerable {
   [object]$Doc
+  [string]$Name
   [object[]]$Entities = @()
   [int]$Count = 0
   [scriptblock]$Filter
@@ -83,6 +84,7 @@ function New-FakeAutoCAD {
     param($Name)
     $set = [FakeSelectionSet]::new()
     $set.Doc = $this.Doc
+    $set.Name = $Name
     $set.Filter = {
       param($Doc, $Codes, $Values)
       $all = @($Doc.Registry.Values | Where-Object { -not $_.Deleted -and $_.OwnerID -eq 1 } | Sort-Object Handle)
