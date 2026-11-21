@@ -370,7 +370,8 @@ function Select-Entities($Doc, [string[]]$Types, [string]$Layer, [string]$Layout
   } else {
     $set.Select(5, $missing, $missing, $missing, $missing)
   }
-  return $set
+  # The comma keeps PowerShell from unrolling the set into its entities; Delete() on those erases them.
+  return , $set
 }
 
 function Find-Entities($Acad, $Params) {
