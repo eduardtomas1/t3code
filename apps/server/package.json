@@ -21,6 +21,8 @@
     "build:exe": "node scripts/cli.ts build-exe",
     "start": "node dist/bin.mjs",
     "typecheck": "effect-tsgo tsrs --noEmit",
+    "cad:sync": "node scripts/sync-cad-host-sources.ts",
+    "cad:check": "node scripts/sync-cad-host-sources.ts --check",
     "speech:catalog:sync": "node scripts/sync-speech-catalog.ts",
     "speech:catalog:check": "node scripts/sync-speech-catalog.ts --check",
     "test": "vp test run",

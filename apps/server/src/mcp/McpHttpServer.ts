@@ -87,6 +87,10 @@ import { PullRequestsToolkit } from "./toolkits/pullRequests/tools.ts";
 import * as IssuesHandlers from "./toolkits/issues/handlers.ts";
 import { IssuesToolkit } from "./toolkits/issues/tools.ts";
 import * as DeviceHandlers from "./toolkits/device/handlers.ts";
+import * as CadService from "../cad/CadService.ts";
+import * as CadHosts from "../cad/CadHosts.ts";
+import * as CadHandlers from "./toolkits/cad/handlers.ts";
+import { CadCaptureTool, CadCaptureToolkit, CadStandardToolkit } from "./toolkits/cad/tools.ts";
 import {
   DeviceScreenshotTool,
   DeviceScreenshotToolkit,
@@ -976,6 +980,29 @@ const registerDeviceScreenshot = Effect.fn("McpHttpServer.registerDeviceScreensh
 const isOrchestratorMcpFailure = Schema.is(OrchestratorMcpFailure);
 const isDeviceToolError = Schema.is(DeviceToolError);
 
+const registerCadCapture = Effect.fn("McpHttpServer.registerCadCapture")(function* () {
+  const cad = yield* CadService.CadService;
+  const threads = yield* ThreadManagementService.ThreadManagementService;
+  const built = yield* decodeAsAdvertised(CadCaptureToolkit);
+  yield* registerImageTool(
+    CadCaptureTool,
+    (payload) =>
+      built
+        .handle("cad_capture_view", payload)
+        .pipe(Stream.unwrap, Stream.run(Sink.last()), Effect.flatMap(Effect.fromOption)),
+    (effect) =>
+      effect.pipe(
+        Effect.provideService(CadService.CadService, cad),
+        Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+      ),
+    "capture",
+    (error) =>
+      CadHosts.isCadError(error) || isOrchestratorMcpFailure(error)
+        ? error.message
+        : (parameterValidationMessage(error) ?? "CAD capture failed."),
+  );
+});
+
 const registerHtmlPreview = Effect.fn("McpHttpServer.registerHtmlPreview")(function* () {
   const htmlRender = yield* HtmlRender.HtmlRender;
   const threads = yield* ThreadManagementService.ThreadManagementService;
@@ -1382,6 +1409,11 @@ export const layerDeviceToolkit = Layer.mergeAll(
   layerDeviceScreenshotRegistration,
 );
 
+const layerCadToolkit = Layer.mergeAll(
+  toolkitRegistration(CadStandardToolkit, CadHandlers.layerStandard),
+  imageToolRegistration(registerCadCapture(), CadHandlers.layerCapture),
+).pipe(Layer.provide(CadService.layer), Layer.provide(CadHosts.layer));
+
 /**
  * `McpServer` for in-process calls, which provide `McpInvocationContext`
  * around `callTool` as the auth middleware does for each /mcp request.
@@ -1425,6 +1457,7 @@ export const layerTools = Layer.mergeAll(
   layerPullRequestsToolkit,
   layerIssuesToolkit,
   layerDeviceToolkit,
+  layerCadToolkit,
   layerHtmlToolkit,
   layerMessageToolkit,
 );

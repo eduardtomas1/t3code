@@ -1,0 +1,68 @@
+name: CAD bridges
+
+# The SketchUp and AutoCAD bridges run inside the CAD apps, so their tests use
+# fakes of each app's API and need only Ruby or PowerShell.
+
+on:
+  pull_request:
+    paths:
+      - apps/server/src/cad/hosts/**
+      - .github/workflows/cad-bridges.yml
+  push:
+    branches: [main]
+    paths:
+      - apps/server/src/cad/hosts/**
+      - .github/workflows/cad-bridges.yml
+
+permissions:
+  contents: read
+
+jobs:
+  sketchup:
+    name: SketchUp bridge (Ruby)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          sparse-checkout: apps/server/src/cad/hosts
+
+      - name: Test
+        run: |
+          ruby --version
+          ruby apps/server/src/cad/hosts/sketchup/bridge_test.rb
+
+  autocad:
+    name: AutoCAD bridge (PowerShell)
+    runs-on: windows-2025
+    timeout-minutes: 10
+    steps:
+      - name: Checkout
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6.1.0
+        with:
+          sparse-checkout: apps/server/src/cad/hosts
+
+      # AutoCAD loads the bridge through Windows PowerShell 5.1.
+      - name: Test on Windows PowerShell 5.1
+        shell: powershell
+        run: powershell -NoProfile -File apps/server/src/cad/hosts/autocad/T3CadBridge.Tests.ps1; exit $LASTEXITCODE
+
+      # The COM message filter and window capture compile at runtime with the
+      # .NET Framework C# 5 compiler; prove they still do, and that the entry
+      # point answers a missing AutoCAD with a JSON error instead of crashing.
+      - name: Compile interop and answer without AutoCAD
+        shell: powershell
+        run: |
+          $env:T3_CAD_BRIDGE_TEST = '1'
+          . ./apps/server/src/cad/hosts/autocad/T3CadBridge.ps1
+          Initialize-Interop
+          if ($null -eq ('T3Cad.Window' -as [type])) { throw 'interop did not load' }
+          Remove-Item Env:T3_CAD_BRIDGE_TEST
+          $answer = '{"v":1,"id":"ci","method":"documents","params":{}}' | powershell -NoProfile -NonInteractive -File apps/server/src/cad/hosts/autocad/T3CadBridge.ps1 | ConvertFrom-Json
+          if ($answer.ok -or $answer.error.code -notin @('HOST_OFFLINE', 'NOT_INSTALLED')) { throw "unexpected answer: $($answer | ConvertTo-Json -Compress)" }
+          "interop ok; without AutoCAD the bridge answers $($answer.error.code)"
+
+      - name: Test on PowerShell 7
+        shell: pwsh
+        run: pwsh -NoProfile -File apps/server/src/cad/hosts/autocad/T3CadBridge.Tests.ps1; exit $LASTEXITCODE
