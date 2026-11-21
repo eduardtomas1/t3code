@@ -25,13 +25,15 @@ const Point = Schema.Array(Schema.Finite).check(Schema.isMinLength(2), Schema.is
 const Point2 = Schema.Array(Schema.Finite).check(Schema.isMinLength(2), Schema.isMaxLength(2));
 const Vector3 = Schema.Array(Schema.Finite).check(Schema.isMinLength(3), Schema.isMaxLength(3));
 const Positive = Schema.Finite.check(Schema.isGreaterThan(0));
-const Handles = Schema.Array(Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32)))
+const Handle = Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(32));
+const Handles = Schema.Array(Handle)
   .check(Schema.isMinLength(1), Schema.isMaxLength(500))
   .annotate({ description: "AutoCAD entity handles from a read." });
 const Ids = Schema.Array(Schema.String.check(Schema.isPattern(/^\d{1,20}$/u)))
   .check(Schema.isMinLength(1), Schema.isMaxLength(500))
   .annotate({ description: "SketchUp ids from a read." });
 const Layer = Schema.optionalKey(Name);
+const Angle = Schema.optionalKey(Schema.Finite);
 
 const op = <const Kind extends string, Fields extends Schema.Struct.Fields>(
   kind: Kind,
@@ -60,6 +62,26 @@ export const CadOperation = Schema.Union([
   op("acad.set_rotation", { handles: Handles, rotationDeg: Schema.Finite }),
   op("acad.rotate", { handles: Handles, basePoint: Point, angleDeg: Schema.Finite }),
   op("acad.erase", { handles: Handles }),
+  op("acad.copy", {
+    handles: Handles,
+    vector: Point,
+    count: Schema.optionalKey(Schema.Int.check(Schema.isBetween({ minimum: 1, maximum: 50 }))),
+  }),
+  op("acad.mirror", {
+    handles: Handles,
+    p1: Point,
+    p2: Point,
+    keepSource: Schema.optionalKey(Schema.Boolean),
+  }),
+  op("acad.scale", { handles: Handles, basePoint: Point, factor: Positive }),
+  op("acad.offset", { handle: Handle, distance: Schema.Finite }),
+  op("acad.insert_block", {
+    name: Name,
+    position: Point,
+    rotationDeg: Angle,
+    scale: Schema.optionalKey(Positive),
+    layer: Layer,
+  }),
   op("acad.add_line", { start: Point, end: Point, layer: Layer }),
   op("acad.add_polyline", {
     points: Schema.Array(Point).check(Schema.isMinLength(2), Schema.isMaxLength(1000)),
@@ -71,7 +93,30 @@ export const CadOperation = Schema.Union([
     position: Point,
     height: Positive,
     text: Schema.String.check(Schema.isMinLength(1), Schema.isMaxLength(2000)),
-    rotationDeg: Schema.optionalKey(Schema.Finite),
+    rotationDeg: Angle,
+    layer: Layer,
+  }),
+  op("acad.add_arc", {
+    center: Point,
+    radius: Positive,
+    startDeg: Schema.Finite,
+    endDeg: Schema.Finite,
+    layer: Layer,
+  }),
+  op("acad.add_hatch", {
+    // Points or handles; the bridge checks counts and the pattern name.
+    boundary: Schema.Union([Schema.Array(Point), Schema.Array(Schema.String)]),
+    pattern: Schema.optionalKey(Schema.String),
+    scale: Schema.optionalKey(Positive),
+    angleDeg: Angle,
+    layer: Layer,
+  }),
+  op("acad.add_dimension", {
+    kind: Schema.Literals(["aligned", "linear"]),
+    p1: Point,
+    p2: Point,
+    textPosition: Point,
+    rotationDeg: Angle,
     layer: Layer,
   }),
   op("skp.create_tag", { name: Name }),
@@ -258,7 +303,7 @@ export const CadCaptureTool = Tool.make("cad_capture_view", {
 
 const CadPreviewTool = Tool.make("cad_preview_changes", {
   description:
-    "Check an edit without changing anything; returns a short-lived `proposalId` with every before/after value. Targets come from reads; only top-level or unshared objects can be edited. A proposal covers exactly these operations; if the request changes, preview again and apply the new proposalId. Tell the user what will change, then call cad_apply_changes. AutoCAD ops (drawing units, see cad_document_info): acad.create_layer{name,color?} set_layer{handles,layer} set_color{handles,color} set_text{handles,text} set_attribute{handles,tag,value} move{handles,vector} set_rotation{handles,rotationDeg} rotate{handles,basePoint,angleDeg} erase{handles} add_line{start,end,layer?} add_polyline{points,closed?,layer?} add_circle{center,radius,layer?} add_text{position,height,text,rotationDeg?,layer?}. SketchUp ops (always mm): skp.create_tag{name} create_material{name,color,alpha?} set_tag{ids,tag} set_material{ids,material} rename{ids,name} move{ids,vectorMm} set_hidden{ids,hidden} erase{ids} add_box{originMm,sizeMm,name?,tag?,material?}.",
+    "Check an edit without changing anything; returns a short-lived `proposalId` with every before/after value. Targets come from reads; only top-level or unshared objects can be edited. A proposal covers exactly these operations; if the request changes, preview again and apply the new proposalId. Tell the user what will change, then call cad_apply_changes. AutoCAD ops (drawing units, see cad_document_info): acad.create_layer{name,color?} set_layer{handles,layer} set_color{handles,color} set_text{handles,text} set_attribute{handles,tag,value} move{handles,vector} set_rotation{handles,rotationDeg} rotate{handles,basePoint,angleDeg} erase{handles} copy{handles,vector,count?} mirror{handles,p1,p2,keepSource?} scale{handles,basePoint,factor} offset{handle,distance} insert_block{name,position,rotationDeg?,scale?,layer?} add_line{start,end,layer?} add_polyline{points,closed?,layer?} add_circle{center,radius,layer?} add_arc{center,radius,startDeg,endDeg,layer?} add_text{position,height,text,rotationDeg?,layer?} add_hatch{boundary,pattern?,scale?,angleDeg?,layer?} add_dimension{kind,p1,p2,textPosition,rotationDeg?,layer?}. SketchUp ops (always mm): skp.create_tag{name} create_material{name,color,alpha?} set_tag{ids,tag} set_material{ids,material} rename{ids,name} move{ids,vectorMm} set_hidden{ids,hidden} erase{ids} add_box{originMm,sizeMm,name?,tag?,material?}.",
   parameters: Schema.Struct({
     documentId: DocumentId,
     operations: Schema.Array(CadOperation).check(Schema.isMinLength(1), Schema.isMaxLength(50)),
@@ -269,6 +314,7 @@ const CadPreviewTool = Tool.make("cad_preview_changes", {
     changes: Schema.Array(CadService.CadChange),
     warnings: Schema.Array(Schema.String),
     expiresAt: Schema.NullOr(Schema.String),
+    bbox: Schema.optional(CadService.CadBox),
   }),
   failure,
   failureMode: "return",

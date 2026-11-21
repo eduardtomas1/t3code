@@ -79,11 +79,19 @@ export const CadChange = Schema.Struct({
 });
 export type CadChange = typeof CadChange.Type;
 
+export const CadBox = Schema.Struct({
+  min: Schema.Array(Schema.Number),
+  max: Schema.Array(Schema.Number),
+});
+export type CadBox = typeof CadBox.Type;
+
 const HostPreview = Schema.Struct({
   documentId: Schema.String,
   changes: Schema.Array(CadChange),
   fingerprints: Schema.Record(Schema.String, Schema.String),
   warnings: Schema.Array(Schema.String),
+  /** What the change touches, before and after, to frame a capture. */
+  bbox: Schema.optional(CadBox),
 });
 
 const HostApply = Schema.Struct({
@@ -186,6 +194,7 @@ export class CadService extends Context.Service<
         readonly changes: ReadonlyArray<CadChange>;
         readonly warnings: ReadonlyArray<string>;
         readonly expiresAt: string | null;
+        readonly bbox?: CadBox;
       },
       CadError
     >;
@@ -482,6 +491,7 @@ const make = Effect.gen(function* () {
       changes: result.changes,
       warnings: result.warnings,
       expiresAt: DateTime.formatIso(DateTime.makeUnsafe(proposal.expiresAt)),
+      ...(result.bbox === undefined ? {} : { bbox: result.bbox }),
     };
   });
 
