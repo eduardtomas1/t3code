@@ -763,7 +763,8 @@ function Main {
   $stdin = [Console]::OpenStandardInput()
   $buffer = New-Object System.IO.MemoryStream
   $stdin.CopyTo($buffer)
-  $raw = [System.Text.Encoding]::UTF8.GetString($buffer.ToArray())
+  # Callers that pipe from PowerShell prepend a byte-order mark; JSON parsing rejects it.
+  $raw = [System.Text.Encoding]::UTF8.GetString($buffer.ToArray()).TrimStart([char]0xFEFF)
   try {
     $json = Invoke-Request $raw { Initialize-Interop | Out-Null; Connect-AutoCAD }
   } finally {
