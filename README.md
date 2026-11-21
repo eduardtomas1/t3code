@@ -23,6 +23,9 @@
   </a>
 </p>
 
+> [!NOTE]
+> This fork adds AutoCAD and SketchUp tools that every agent can use. See [AutoCAD and SketchUp](./docs/user/cad.md) for setup, and get the Windows installer from [Releases](https://github.com/eduardtomas1/t3code/releases).
+
 T3 Code runs the coding agents on your machine and gives them one fast interface. Start a thread at your desk, then approve the next step from your phone.
 
 It works with Claude Code, Codex, Cursor, OpenCode, Grok Build, Antigravity, Kiro, Pi, Muse Code, fx, and any [ACP](./docs/user/providers-acp.md) agent. If an agent is set up on your computer, T3 Code can control it.
