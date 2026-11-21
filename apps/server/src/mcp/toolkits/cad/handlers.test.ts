@@ -52,6 +52,7 @@ const fakeAutoCad = (applied: Array<unknown>): CadHost => ({
           ],
           fingerprints: { "entity:1A": "abc" },
           warnings: [],
+          bbox: { min: [0, 0], max: [10, 5] },
         });
       case "apply":
         applied.push(params);
@@ -155,6 +156,7 @@ it.effect("previews, applies once, and reports host failures as tool errors", ()
       expect(preview.isFailure).toBe(false);
       const proposalId = (preview.result as { proposalId: string }).proposalId;
       expect(proposalId).toMatch(/^cadp_/u);
+      expect(preview.result).toMatchObject({ bbox: { min: [0, 0], max: [10, 5] } });
 
       const first = yield* call("cad_apply_changes", { proposalId });
       expect(first.result).toMatchObject({ status: "applied", proposalId });

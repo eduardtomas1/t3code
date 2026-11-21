@@ -38,7 +38,7 @@ Agents can also render a drawing to an image or a PDF, export it to DXF, or buil
 
 ## What agents can edit
 
-- **AutoCAD**, in drawing units: add lines, polylines, circles, and text; create layers; move and erase objects; change an object's layer or color; change text and block attribute values.
+- **AutoCAD**, in drawing units: add lines, polylines, circles, arcs, text, hatches, and aligned or linear dimensions (in your current dimension style); insert blocks already defined in the drawing; create layers; move, rotate, copy, mirror, scale, offset, and erase objects; change an object's layer or color; change text and block attribute values. New objects go on the current layer unless the agent picks one, with color, linetype, and lineweight ByLayer.
 - **SketchUp**, in millimeters: add boxes; create tags and materials; move, erase, hide, or show objects; rename them; change an object's tag or material.
 
 Agents can't change objects inside a block definition in AutoCAD, or inside a component or group in SketchUp that appears more than once, because the edit would change every copy. Objects nested inside a SketchUp group or component that appears only once can be edited. Erasing a SketchUp edge also deletes the faces it bounds; the preview says so. Objects on locked layers in AutoCAD, and locked objects or objects inside locked groups in SketchUp, are refused; unlock them first. Agents can't run commands, scripts, or plugins in the CAD apps.
