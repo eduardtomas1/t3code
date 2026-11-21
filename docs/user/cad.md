@@ -1,6 +1,6 @@
 # AutoCAD and SketchUp
 
-Agents can read and edit the drawing or model you have open in AutoCAD or SketchUp. Ask for an overview of the drawing, what is selected, or objects by layer, type, or area; capture the current view as an image; or have the agent draw, move, recolor, or retag objects. Every agent you use in T3 Code gets these tools without any setup in the agent itself. Nothing in your drawing changes until you approve it in the CAD app, and one Undo reverts each approved change.
+Agents can read and edit the drawing or model you have open in AutoCAD or SketchUp. Ask for an overview of the drawing, what is selected, or objects by layer, type, or area; capture the current view as an image; or have the agent draw, move, recolor, or retag objects. Every agent you use in T3 Code gets these tools without any setup in the agent itself, along with a built-in CAD guide on working safely and producing drawings that pass as your own. Nothing in your drawing changes until you approve it in the CAD app, and one Undo reverts each approved change.
 
 ## Requirements
 
@@ -27,6 +27,14 @@ Each preview can be applied once, within 30 minutes. If the CAD app was busy or 
 ## Save a copy
 
 Ask the agent to "save a copy" to keep a snapshot of your work. Copies are always new files and never replace an existing file. By default the copy goes next to the original as `<name> (T3 copy <date and time>)`; only a thread with full access can choose another folder. In AutoCAD, edits the agent applied are in the open drawing until you save it, and the agent can't copy a drawing with unsaved changes, so save it first (Ctrl+S), then ask for the copy.
+
+## New drawings and exports
+
+Agents can also render a drawing to an image or a PDF, export it to DXF, or build a new DWG from a drawing they wrote, using AutoCAD's own engine in the background. They always work on a copy of the saved file: your open drawing never changes, so these need no approval. Because they read the last save, save first (Ctrl+S) if you want recent edits included; the agent is told when the open drawing has unsaved changes.
+
+- Exports of your drawings go to T3 Code's own folder, and the agent tells you where. Drawings an agent builds from its own files go next to those files. Nothing replaces a file T3 Code did not write; only a thread with full access can choose another location.
+- A new DWG can use one of your drawings as a template: it gets your layers, text and dimension styles, and page setups, while your geometry is left out.
+- This needs full AutoCAD for Windows; the agent checks it with "what CAD drawings do I have open?". Files your drawing references by a relative path, such as images or xrefs, don't appear in renders.
 
 ## What agents can edit
 

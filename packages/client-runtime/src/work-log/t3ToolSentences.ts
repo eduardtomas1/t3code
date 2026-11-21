@@ -882,6 +882,14 @@ const T3_TOOL_SENTENCES: ReadonlyMap<string, T3ToolSentence> = new Map<string, T
     },
   ],
   [
+    "Read\nReading\nRead\nthe CAD guide",
+    {
+      detail: msg(
+        "{status, select, inProgress {Reading the CAD guide} completed {Read the CAD guide} failed {Failed to read the CAD guide} declined {Declined to read the CAD guide} stopped {Stopped reading the CAD guide} other {Reading the CAD guide}}",
+      ),
+    },
+  ],
+  [
     "Set up\nSetting up\nSet up\nCAD apps",
     {
       detail: msg(
@@ -918,6 +926,14 @@ const T3_TOOL_SENTENCES: ReadonlyMap<string, T3ToolSentence> = new Map<string, T
     {
       detail: msg(
         "{status, select, inProgress {Capturing the CAD view} completed {Captured the CAD view} failed {Failed to capture the CAD view} declined {Declined to capture the CAD view} stopped {Stopped capturing the CAD view} other {Capturing the CAD view}}",
+      ),
+    },
+  ],
+  [
+    "Export\nExporting\nExported\na CAD drawing",
+    {
+      detail: msg(
+        "{status, select, inProgress {Exporting a CAD drawing} completed {Exported a CAD drawing} failed {Failed to export a CAD drawing} declined {Declined to export a CAD drawing} stopped {Stopped exporting a CAD drawing} other {Exporting a CAD drawing}}",
       ),
     },
   ],

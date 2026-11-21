@@ -89,9 +89,16 @@ import * as IssuesHandlers from "./toolkits/issues/handlers.ts";
 import { IssuesToolkit } from "./toolkits/issues/tools.ts";
 import * as DeviceHandlers from "./toolkits/device/handlers.ts";
 import * as CadService from "../cad/CadService.ts";
+import * as ProcessRunner from "../processRunner.ts";
 import * as CadHosts from "../cad/CadHosts.ts";
 import * as CadHandlers from "./toolkits/cad/handlers.ts";
-import { CadCaptureTool, CadCaptureToolkit, CadStandardToolkit } from "./toolkits/cad/tools.ts";
+import {
+  CadCaptureTool,
+  CadCaptureToolkit,
+  CadExportTool,
+  CadExportToolkit,
+  CadStandardToolkit,
+} from "./toolkits/cad/tools.ts";
 import {
   DeviceScreenshotTool,
   DeviceScreenshotToolkit,
@@ -815,7 +822,8 @@ const registerPreviewSnapshot = Effect.fn("McpHttpServer.registerPreviewSnapshot
 });
 
 interface ImageToolResult {
-  readonly screenshot: {
+  /** Absent when the call produced no image, such as a cad_export to PDF. */
+  readonly screenshot?: {
     readonly mimeType: "image/png";
     readonly data: string;
     readonly width: number;
@@ -920,25 +928,32 @@ const registerImageTool = Effect.fn("McpHttpServer.registerImageTool")(function*
             onFailure: imageToolFailure(tool.name, operation, failureText),
             onSuccess: ({ encodedResult }) => {
               const { screenshot, ...rest } = encodedResult as ImageToolResult;
-              const metadata = {
-                ...rest,
-                screenshot: {
-                  mimeType: screenshot.mimeType,
-                  width: screenshot.width,
-                  height: screenshot.height,
-                },
-              };
+              const metadata =
+                screenshot === undefined
+                  ? rest
+                  : {
+                      ...rest,
+                      screenshot: {
+                        mimeType: screenshot.mimeType,
+                        width: screenshot.width,
+                        height: screenshot.height,
+                      },
+                    };
               return Effect.succeed(
                 new McpSchema.CallToolResult({
                   isError: false,
                   structuredContent: metadata,
                   content: [
                     { type: "text", text: JSON.stringify(metadata) },
-                    {
-                      type: "image" as const,
-                      data: new Uint8Array(Buffer.from(screenshot.data, "base64")),
-                      mimeType: screenshot.mimeType,
-                    },
+                    ...(screenshot === undefined
+                      ? []
+                      : [
+                          {
+                            type: "image" as const,
+                            data: new Uint8Array(Buffer.from(screenshot.data, "base64")),
+                            mimeType: screenshot.mimeType,
+                          },
+                        ]),
                   ],
                 }),
               );
@@ -1001,6 +1016,29 @@ const registerCadCapture = Effect.fn("McpHttpServer.registerCadCapture")(functio
       CadHosts.isCadError(error) || isOrchestratorMcpFailure(error)
         ? error.message
         : (parameterValidationMessage(error) ?? "CAD capture failed."),
+  );
+});
+
+const registerCadExport = Effect.fn("McpHttpServer.registerCadExport")(function* () {
+  const cad = yield* CadService.CadService;
+  const threads = yield* ThreadManagementService.ThreadManagementService;
+  const built = yield* decodeAsAdvertised(CadExportToolkit);
+  yield* registerImageTool(
+    CadExportTool,
+    (payload) =>
+      built
+        .handle("cad_export", payload)
+        .pipe(Stream.unwrap, Stream.run(Sink.last()), Effect.flatMap(Effect.fromOption)),
+    (effect) =>
+      effect.pipe(
+        Effect.provideService(CadService.CadService, cad),
+        Effect.provideService(ThreadManagementService.ThreadManagementService, threads),
+      ),
+    "export",
+    (error) =>
+      CadHosts.isCadError(error) || isOrchestratorMcpFailure(error)
+        ? error.message
+        : (parameterValidationMessage(error) ?? "CAD export failed."),
   );
 });
 
@@ -1413,7 +1451,12 @@ export const layerDeviceToolkit = Layer.mergeAll(
 const layerCadRegistrations = Layer.mergeAll(
   toolkitRegistration(CadStandardToolkit, CadHandlers.layerStandard),
   imageToolRegistration(registerCadCapture(), CadHandlers.layerCapture),
-).pipe(Layer.provide(CadService.layer), Layer.provide(CadHosts.layer));
+  imageToolRegistration(registerCadExport(), CadHandlers.layerExport),
+).pipe(
+  Layer.provide(CadService.layer),
+  Layer.provide(CadHosts.layer),
+  Layer.provide(ProcessRunner.layer),
+);
 
 // AutoCAD and SketchUp desktop run only on Windows and macOS; elsewhere the tools would only cost context.
 const layerCadToolkit = Layer.unwrap(

@@ -4,6 +4,7 @@ import * as NodeFSP from "node:fs/promises";
 import * as NodePath from "node:path";
 
 import * as Clock from "effect/Clock";
+import * as Config from "effect/Config";
 import * as Context from "effect/Context";
 import * as DateTime from "effect/DateTime";
 import * as Deferred from "effect/Deferred";
@@ -16,7 +17,14 @@ import * as Semaphore from "effect/Semaphore";
 import * as HostProcess from "@t3tools/shared/HostProcess";
 
 import * as ServerConfig from "../config.ts";
+import * as ProcessRunner from "../processRunner.ts";
+import * as CadExport from "./CadExport.ts";
 import * as CadHosts from "./CadHosts.ts";
+import {
+  CAD_GUIDE_AUTOCAD,
+  CAD_GUIDE_PRESENTATION,
+  CAD_GUIDE_SKETCHUP,
+} from "./hostSources.generated.ts";
 import { CadError, type CadApp, type CadDocument, type CadHostStatus } from "./CadHosts.ts";
 
 const PROPOSAL_TTL_MS = 30 * 60 * 1000;
@@ -57,6 +65,15 @@ const UNKNOWN_OUTCOME_CODES = new Set([
   "APPLY_UNCONFIRMED",
   CadHosts.HOST_UNREADABLE,
 ]);
+
+export const CadGuideTopic = Schema.Literals(["autocad", "sketchup", "presentation"]);
+export type CadGuideTopic = typeof CadGuideTopic.Type;
+
+const GUIDES: Record<CadGuideTopic, string> = {
+  autocad: CAD_GUIDE_AUTOCAD,
+  sketchup: CAD_GUIDE_SKETCHUP,
+  presentation: CAD_GUIDE_PRESENTATION,
+};
 
 export const CadChange = Schema.Struct({
   op: Schema.String,
@@ -148,6 +165,8 @@ export class CadService extends Context.Service<
     readonly status: (app?: CadApp) => Effect.Effect<{
       readonly hosts: ReadonlyArray<Omit<CadHostStatus, "documents">>;
       readonly documents: ReadonlyArray<CadDocument>;
+      /** Whether AutoCAD's console is installed, so cad_export works. */
+      readonly headless: boolean;
     }>;
     /** Sets up only `app` when given, so one app's missing install never fails the other. */
     readonly setup: (
@@ -162,6 +181,7 @@ export class CadService extends Context.Service<
     ) => Effect.Effect<Readonly<Record<string, unknown>>, CadError>;
     readonly info: (input: {
       readonly documentId: string;
+      readonly style?: boolean | undefined;
     }) => Effect.Effect<Readonly<Record<string, unknown>>, CadError>;
     readonly capture: (input: CaptureInput) => Effect.Effect<typeof HostCapture.Type, CadError>;
     readonly preview: (input: {
@@ -184,6 +204,14 @@ export class CadService extends Context.Service<
       readonly documentId: string;
       readonly destination?: string | undefined;
     }) => Effect.Effect<Readonly<Record<string, unknown>>, CadError>;
+    readonly guide: (topic: CadGuideTopic) => {
+      readonly topic: CadGuideTopic;
+      readonly guide: string;
+    };
+    /** Runs AutoCAD's console on a copy; the open session and the original are never touched. */
+    readonly export: (
+      input: CadExport.CadExportInput,
+    ) => Effect.Effect<CadExport.CadExportResult, CadError>;
   }
 >()("t3/cad/CadService") {}
 
@@ -374,15 +402,33 @@ const make = Effect.gen(function* () {
     }
   };
 
+  const exporter = yield* CadExport.makeExporter({
+    stateDir: config.stateDir,
+    platform,
+    programFiles: Option.getOrUndefined(yield* Config.option(Config.String("ProgramFiles"))),
+    systemRoot: Option.getOrUndefined(yield* Config.option(Config.String("SystemRoot"))),
+    documents: Effect.forEach(
+      hosts.filter((host) => host.app === "autocad"),
+      (host) => Effect.map(host.status, (hostStatus) => hostStatus.documents),
+    ).pipe(Effect.map((lists) => lists.flat())),
+  });
+
   const status = Effect.fn("CadService.status")(function* (app?: CadApp) {
-    const statuses = yield* Effect.forEach(
-      hosts.filter((host) => app === undefined || host.app === app),
-      (host) => host.status,
+    const [statuses, headless] = yield* Effect.all(
+      [
+        Effect.forEach(
+          hosts.filter((host) => app === undefined || host.app === app),
+          (host) => host.status,
+          { concurrency: "unbounded" },
+        ),
+        exporter.headless,
+      ],
       { concurrency: "unbounded" },
     );
     return {
       hosts: statuses.map(({ documents: _documents, ...rest }) => rest),
       documents: statuses.flatMap((hostStatus) => hostStatus.documents),
+      headless,
     };
   });
 
@@ -416,10 +462,22 @@ const make = Effect.gen(function* () {
   const query = Effect.fn("CadService.query")(function* (
     input: { readonly documentId: string } & Readonly<Record<string, unknown>>,
   ) {
-    return yield* read("query", input);
+    // Units are in cad_document_info and the tool description; repeating them costs every page.
+    const { units: _units, ...rows } = yield* read("query", input);
+    return rows;
   });
 
-  const info = Effect.fn("CadService.info")(function* (input: { readonly documentId: string }) {
+  const info = Effect.fn("CadService.info")(function* (input: {
+    readonly documentId: string;
+    readonly style?: boolean | undefined;
+  }) {
+    const host = yield* hostFor(input.documentId);
+    if (input.style === true && host.app !== "autocad") {
+      return yield* new CadError({
+        code: "INVALID_REQUEST",
+        message: `style works only in AutoCAD; call cad_document_info without it for ${CadHosts.appLabel(host.app)}.`,
+      });
+    }
     return yield* read("info", input);
   });
 
@@ -676,11 +734,23 @@ const make = Effect.gen(function* () {
     preview,
     apply,
     saveCopy,
+    guide: (topic) => ({ topic, guide: GUIDES[topic] }),
+    export: exporter.export,
   });
 });
 
 export const layer = Layer.effect(CadService, make);
 
-/** For tests that supply their own hosts. */
-export const layerWithHosts = (hosts: ReadonlyArray<CadHosts.CadHost>) =>
-  layer.pipe(Layer.provide(Layer.succeed(CadHosts.CadHosts, CadHosts.CadHosts.of({ hosts }))));
+/** For tests that supply their own hosts, and optionally a fake process runner for cad_export. */
+export const layerWithHosts = (
+  hosts: ReadonlyArray<CadHosts.CadHost>,
+  runner?: ProcessRunner.ProcessRunner["Service"],
+) =>
+  layer.pipe(
+    Layer.provide(Layer.succeed(CadHosts.CadHosts, CadHosts.CadHosts.of({ hosts }))),
+    Layer.provide(
+      runner === undefined
+        ? ProcessRunner.layer
+        : Layer.succeed(ProcessRunner.ProcessRunner, ProcessRunner.ProcessRunner.of(runner)),
+    ),
+  );

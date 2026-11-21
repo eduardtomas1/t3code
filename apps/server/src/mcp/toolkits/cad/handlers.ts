@@ -4,7 +4,12 @@ import * as Effect from "effect/Effect";
 import * as CadService from "../../../cad/CadService.ts";
 import * as McpToolAccess from "../../McpToolAccess.ts";
 import { loadCaller } from "../../threadAccess.ts";
-import { CadCaptureToolkit, CadStandardToolkit, type CadToolkit } from "./tools.ts";
+import {
+  CadCaptureToolkit,
+  CadExportToolkit,
+  CadStandardToolkit,
+  type CadToolkit,
+} from "./tools.ts";
 
 const DEFAULT_CAPTURE_SIZE = 1280;
 
@@ -20,6 +25,9 @@ const requireFullAccess = (refusal: string) =>
 const handlers = {
   cad_status: McpToolAccess.reads(({ app }) =>
     Effect.flatMap(CadService.CadService, (cad) => cad.status(app)),
+  ),
+  cad_guide: McpToolAccess.reads(({ topic }) =>
+    Effect.map(CadService.CadService, (cad) => cad.guide(topic)),
   ),
   // Installs code SketchUp runs on this computer, which fenced linked work may not change.
   cad_setup: McpToolAccess.writes(
@@ -78,10 +86,39 @@ const handlers = {
       };
     }),
   ),
+  // Works on copies and never touches the live session, so no approval dialog applies; it still
+  // writes files beside the designer's, which fenced linked work may not.
+  cad_export: McpToolAccess.writes(
+    (input) =>
+      (input.destination === undefined
+        ? Effect.void
+        : requireFullAccess(
+            "Only full-access threads can choose where an export goes. Omit destination to write it beside the source.",
+          )
+      ).pipe(
+        Effect.andThen(Effect.flatMap(CadService.CadService, (cad) => cad.export(input))),
+        Effect.map(({ screenshot, ...rest }) => ({
+          ...rest,
+          ...(screenshot === undefined
+            ? {}
+            : {
+                screenshot: {
+                  mimeType: "image/png" as const,
+                  data: screenshot.pngBase64,
+                  width: screenshot.width,
+                  height: screenshot.height,
+                },
+              }),
+        })),
+      ),
+    { linkedCallers: { refused: "write files on this computer" } },
+  ),
 } satisfies McpToolAccess.Handlers<typeof CadToolkit.tools>;
 
-const { cad_capture_view, ...standardHandlers } = handlers;
+const { cad_capture_view, cad_export, ...standardHandlers } = handlers;
 
 export const layerStandard = McpToolAccess.toLayer(CadStandardToolkit, standardHandlers);
 
 export const layerCapture = McpToolAccess.toLayer(CadCaptureToolkit, { cad_capture_view });
+
+export const layerExport = McpToolAccess.toLayer(CadExportToolkit, { cad_export });
