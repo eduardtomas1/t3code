@@ -35,6 +35,31 @@ class FakeCollection : System.Collections.IEnumerable {
   [System.Collections.IEnumerator] GetEnumerator() { $this.Enumerations++; return $this.Items.GetEnumerator() }
 }
 
+# A block definition enumerates its entities like the real AcadBlock, so PowerShell unrolls a bare return of it.
+class FakeBlock : System.Collections.IEnumerable {
+  [string]$Name
+  [bool]$IsLayout = $false
+  [bool]$IsXRef = $false
+  [System.Collections.ArrayList]$Items = (New-Object System.Collections.ArrayList)
+  [int]$Count = 0
+  [object] Item([int]$Index) { return $this.Items[$Index] }
+  [void] Add($Entity) { [void]$this.Items.Add($Entity); $this.Count = $this.Items.Count }
+  [System.Collections.IEnumerator] GetEnumerator() { return $this.Items.GetEnumerator() }
+}
+
+# The block table: enumerable like the real AcadBlocks, and Item takes an index or a case-insensitive name.
+# A class method returns its object as is on Windows PowerShell 5.1 and 7; a script method may not.
+class FakeBlocks : System.Collections.IEnumerable {
+  [System.Collections.ArrayList]$Definitions = (New-Object System.Collections.ArrayList)
+  [object] Add([string]$Name) { $block = [FakeBlock]::new(); $block.Name = $Name; [void]$this.Definitions.Add($block); return $block }
+  [object] Item([object]$Index) {
+    if ($Index -is [int]) { return $this.Definitions[$Index] }
+    foreach ($block in $this.Definitions) { if ($block.Name -ieq [string]$Index) { return $block } }
+    throw "Unknown block $Index"
+  }
+  [System.Collections.IEnumerator] GetEnumerator() { return $this.Definitions.GetEnumerator() }
+}
+
 # Enumerable like the real AcadSelectionSet, so PowerShell unrolls it the same way when it is returned.
 class FakeSelectionSet : System.Collections.IEnumerable {
   [object]$Doc
@@ -216,9 +241,12 @@ function New-FakeAutoCAD([string]$Name = 'Plan.dwg', [switch]$Empty) {
   $paperModel = [pscustomobject]@{ Name = 'Model'; Block = [pscustomobject]@{ ObjectID = 1 }; CanonicalMediaName = 'Letter'; ConfigName = 'None'; StyleSheet = '' }
   $paperA1 = [pscustomobject]@{ Name = 'A1'; Block = [pscustomobject]@{ ObjectID = 2 }; CanonicalMediaName = 'ISO_full_bleed_A1_(841.00_x_594.00_MM)'; ConfigName = 'DWG To PDF.pc3'; StyleSheet = 'monochrome.ctb' }
 
-  $blocks = [FakeCollection]::new()
-  $blocks.Factory = { param($Name) [pscustomobject]@{ Name = $Name; IsLayout = ($Name -like '*_Space*' -or $Name -eq 'A1-LAYOUT'); IsXRef = ($Name -eq 'SITE') } }
-  foreach ($blockName in '*Model_Space', '*Paper_Space', '*Paper_Space0', '*U12', '*D3', 'TITLE', 'DOOR', 'SITE', 'SITE|TREE', 'A1-LAYOUT') { [void]$blocks.Add($blockName) }
+  $blocks = [FakeBlocks]::new()
+  foreach ($blockName in '*Model_Space', '*Paper_Space', '*Paper_Space0', '*U12', '*D3', 'TITLE', 'DOOR', 'SITE', 'SITE|TREE', 'A1-LAYOUT') {
+    $block = $blocks.Add($blockName)
+    $block.IsLayout = ($blockName -like '*_Space*' -or $blockName -eq 'A1-LAYOUT')
+    $block.IsXRef = ($blockName -eq 'SITE')
+  }
   $doc = [pscustomobject]@{
     Name = $Name; FullName = ''; Saved = $true; ReadOnly = $false; Layers = $layers; TextStyles = $textStyles; DimStyles = $dimStyles
     Layouts = @($paperModel, $paperA1)

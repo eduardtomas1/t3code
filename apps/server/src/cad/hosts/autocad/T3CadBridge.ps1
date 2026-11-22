@@ -923,7 +923,8 @@ function Get-Block($Doc, [string]$Name) {
   if ($Name -and $Name -notmatch '[<>/\\":;?,=`]') { try { $block = $Doc.Blocks.Item($Name) } catch { } }
   if ($null -eq $block) { Fail 'BLOCK_NOT_FOUND' "No block named `"$Name`" in this drawing; cad_document_info lists its blocks." }
   if ([bool]$block.IsXRef -or [bool]$block.IsLayout) { Fail 'UNSUPPORTED_TARGET' "`"$Name`" is an xref or layout block, not one to insert." }
-  return $block
+  # A block definition enumerates its entities, so a bare return would hand back those instead.
+  return , $block
 }
 
 # --- Preview bounds -----------------------------------------------------
